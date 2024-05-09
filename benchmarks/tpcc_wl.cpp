@@ -351,6 +351,8 @@ void TPCCWorkload::init_tab_stock(int id, uint64_t wid) {
     */
 		row->set_value(S_DATA, s_data);
 #endif
+		//  参数4是part_id，表示插入的数据是属于哪个分区的
+		// wh_to_part(wid)的wid又等于g_node_id，g_node_id为常数0，代表属于本地
 		index_insert(i_stock, stockKey(sid, wid), row, wh_to_part(wid));
 	}
 }

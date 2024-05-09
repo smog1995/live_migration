@@ -287,6 +287,7 @@ enum PPSTxnType {PPS_ALL = 0,
 // INDEX_STRUCT
 #define IDX_HASH          1
 #define IDX_BTREE         2
+#define IDX_MIGRATION_HASH 3
 // WORKLOAD
 #define YCSB            1
 #define TPCC            2
