@@ -36,7 +36,7 @@ RC TPCCWorkload::init() {
 	string path;	
 	if (cpath == NULL) 
 		path = "./benchmarks/";
-	else { 
+	else {
 		path = string(cpath);
 		// Graphite:
 		//path += "/tests/apps/dbms/";

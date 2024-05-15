@@ -58,9 +58,12 @@ Message * Message::create_message(char * buf) {
  return msg;
 }
 
+
 Message * Message::create_message(TxnManager * txn, RemReqType rtype) {
  Message * msg = create_message(rtype);
- msg->mcopy_from_txn(txn);
+//  赋值tid
+//  msg->mcopy_from_txn(txn);
+ 
  msg->copy_from_txn(txn);
 
  // copy latency here
@@ -170,6 +173,8 @@ Message * Message::create_message(RemReqType rtype) {
     case CL_RSP:
       msg = new ClientResponseMessage;
       break;
+    case SNAPSHOT_MSG:
+      msg = new SnapshotMessage;
     default: assert(false);
   }
   assert(msg);
@@ -366,6 +371,12 @@ void Message::release_message(Message * msg) {
       delete m_msg;
       break;
                  }
+    case SNAPSHOT_MSG: {
+      SnapshotMessage * m_msg = (SnapshotMessage*)msg;
+      m_msg->release();
+      delete m_msg;
+      break;
+    }
     default: { assert(false); }
   }
 }
@@ -1169,9 +1180,6 @@ void QueryResponseMessage::copy_to_buf(char * buf) {
  assert(ptr == get_size());
 }
 
-/************************/
-
-
 
 uint64_t FinishMessage::get_size() {
   uint64_t size = Message::mget_size();
@@ -1766,3 +1774,77 @@ void PPSQueryMessage::copy_to_buf(char * buf) {
 
 }
 
+
+
+/************************/
+// class SnapshotMessage : public Message {
+// public:
+  // int part_id;
+  // uint8_t table_name_size;
+  // uint32_t tuple_size;
+  // char* table_name;
+  // char* snapshot_buffer;
+  // // vector<row_t*> rows;
+  // bool is_finish;
+//   void init() {}
+//   void copy_from_buf(char * buf);
+//   void copy_to_buf(char * buf);
+//   void release() {}
+// }
+
+//  COPY_VAL(rtype,buf,ptr);
+//   COPY_VAL(txn_id,buf,ptr);
+// #if CC_ALG == CALVIN
+//   COPY_VAL(batch_id,buf,ptr);
+// #endif
+//   COPY_VAL(mq_time,buf,ptr);
+
+//   COPY_VAL(lat_work_queue_time,buf,ptr);
+//   COPY_VAL(lat_msg_queue_time,buf,ptr);
+//   COPY_VAL(lat_cc_block_time,buf,ptr);
+//   COPY_VAL(lat_cc_time,buf,ptr);
+//   COPY_VAL(lat_process_time,buf,ptr);
+//   COPY_VAL(lat_network_time,buf,ptr);
+//   COPY_VAL(lat_other_time,buf,ptr);
+void SnapshotMessage::copy_from_buf(char *buf) {
+  mcopy_from_buf(buf);
+  size_t ptr = Message::mget_size();
+  COPY_VAL(is_finish, buf, ptr);
+  COPY_VAL(part_id, buf, ptr);
+  COPY_VAL(table_name_size, buf, ptr);
+  COPY_VAL(tuple_size, buf, ptr);
+  COPY_VAL(buffer_size, buf, ptr);
+  COPY_VAL_SIZE(table_name, buf, ptr, table_name_size);
+  COPY_VAL_SIZE(snapshot_buffer, buf, ptr, buffer_size);
+  // memcpy(table_name, buf + ptr, table_name_size);
+  // ptr += table_name_size;
+  // memcpy(snapshot_buffer, buf + ptr, buffer_size);
+  // ptr += buffer_size;
+}
+
+void SnapshotMessage::copy_to_buf(char * buf) {
+  mcopy_to_buf(buf);
+  size_t ptr = Message::mget_size();
+  COPY_BUF(buf, is_finish, ptr);
+  COPY_BUF(buf, part_id, ptr);
+  COPY_BUF(buf, table_name_size, ptr);
+  COPY_BUF(buf, tuple_size, ptr);
+  COPY_BUF(buf, buffer_size, ptr);
+  COPY_BUF_SIZE(buf, table_name, ptr, table_name_size);
+  COPY_BUF_SIZE(buf, snapshot_buffer, ptr, buffer_size);
+  // memcpy(buf, table_name, table_name_size);
+  // ptr += table_name_size;
+  // memcpy(buf, snapshot_buffer, buffer_size);
+  // ptr += buffer_size;
+
+}
+
+
+void SnapshotMessage::release() {
+  delete[] snapshot_buffer;
+  delete[] table_name;
+}
+
+uint64_t SnapshotMessage::get_size() {
+  return 0;
+}

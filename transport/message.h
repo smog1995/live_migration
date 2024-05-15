@@ -87,6 +87,28 @@ public:
   void release() {}
 };
 
+//  myt add：live migration step1:transport table data
+class SnapshotMessage : public Message {
+public:
+  bool is_finish;
+  int part_id;
+  uint8_t table_name_size;
+  uint32_t tuple_size;
+  uint32_t buffer_size;
+  char* table_name;
+  char* snapshot_buffer;
+  // vector<row_t*> rows;
+  
+  void init() {}
+  void copy_from_buf(char * buf);
+  void copy_to_buf(char * buf);
+  void copy_from_txn(TxnManager * txn) {};
+  void copy_to_txn(TxnManager * txn) {};
+  uint64_t get_size();
+  void release();
+  
+};
+
 class FinishMessage : public Message {
 public:
   void copy_from_buf(char * buf);
@@ -434,6 +456,8 @@ public:
   // part keys from secondary lookup
   Array<uint64_t> part_keys;
 };
+
+
 
 
 #endif
