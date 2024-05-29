@@ -16,6 +16,7 @@
 #define CLIENT_THREAD_CNT 4
 #define CLIENT_REM_THREAD_CNT 2
 #define CLIENT_SEND_THREAD_CNT 2
+#define CLIENT_MIGRATION_THREAD_CNT 1
 #define CLIENT_RUNTIME false
 
 #define LOAD_METHOD LOAD_MAX
@@ -29,6 +30,8 @@
 // each transaction only accesses only 1 virtual partition. But the lock/ts manager and index are not aware of such partitioning. VIRTUAL_PART_CNT describes the request distribution and is only used to generate queries. For HSTORE, VIRTUAL_PART_CNT should be the same as PART_CNT.
 #define VIRTUAL_PART_CNT    PART_CNT  
 #define PAGE_SIZE         4096 
+#define TABLE_NAME_SIZE 20
+#define MIGRATION_BUFFER_SIZE 2048
 #define CL_SIZE           64
 #define CPU_FREQ          2.6
 // enable hardware migration.
@@ -98,7 +101,7 @@
 // Concurrency Control
 /***********************************************/
 // WAIT_DIE, NO_WAIT, TIMESTAMP, MVCC, CALVIN, MAAT
-#define CC_ALG NO_WAIT
+#define CC_ALG MVCC
 #define ISOLATION_LEVEL SERIALIZABLE
 #define YCSB_ABORT_MODE false
 
@@ -116,7 +119,7 @@
 #define ENABLE_LATCH        false
 #define CENTRAL_INDEX       false
 #define CENTRAL_MANAGER       false
-#define INDEX_STRUCT        IDX_HASH
+#define INDEX_STRUCT        IDX_MIGRATION_HASH
 #define BTREE_ORDER         16
 
 // [TIMESTAMP]
@@ -287,6 +290,7 @@ enum PPSTxnType {PPS_ALL = 0,
 // INDEX_STRUCT
 #define IDX_HASH          1
 #define IDX_BTREE         2
+#define IDX_MIGRATION_HASH 3
 // WORKLOAD
 #define YCSB            1
 #define TPCC            2

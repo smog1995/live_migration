@@ -32,7 +32,7 @@
 #include "message.h"
 #include "abort_queue.h"
 #include "maat.h"
-
+#include "migration_manager.h"
 void WorkerThread::setup() {
 
 	if( get_thd_id() == 0) {
@@ -46,7 +46,7 @@ void WorkerThread::process(Message * msg) {
   RC rc __attribute__ ((unused));
 
   DEBUG("%ld Processing %ld %d\n",get_thd_id(),msg->get_txn_id(),msg->get_rtype());
-  assert(msg->get_rtype() == CL_QRY || msg->get_txn_id() != UINT64_MAX);
+  assert(msg->get_rtype() == CL_QRY || msg->get_txn_id() != UINT64_MAX || msg->get_rtype() == SNAPSHOT_MSG || msg->get_rtype() == SNAPSHOT_ACK || msg->get_rtype() == MIGRATION_MSG); 
   uint64_t starttime = get_sys_clock();
 		switch(msg->get_rtype()) {
 			case RPASS:
@@ -96,6 +96,11 @@ void WorkerThread::process(Message * msg) {
 			case LOG_MSG_RSP:
         rc = process_log_msg_rsp(msg);
 				break;
+      case SNAPSHOT_MSG:
+      case SNAPSHOT_ACK:
+      case MIGRATION_MSG:
+        rc = process_migration_msg(msg);
+        break;
 			default:
         printf("Msg: %d\n",msg->get_rtype());
         fflush(stdout);
@@ -181,6 +186,8 @@ TxnManager * WorkerThread::get_transaction_manager(Message * msg) {
 }
 
 RC WorkerThread::run() {
+  migration_manager = new MigrationManager();
+  migration_manager->init((TPCCWorkload*)_wl);
   tsetup();
   printf("Running WorkerThread %ld\n",_thd_id);
 
@@ -194,21 +201,20 @@ RC WorkerThread::run() {
     progress_stats();
 
     Message * msg = work_queue.dequeue(get_thd_id());
-
+    
     if(!msg) {
       if(idle_starttime ==0)
         idle_starttime = get_sys_clock();
       continue;
     }
+
     if(idle_starttime > 0) {
       INC_STATS(_thd_id,worker_idle_time,get_sys_clock() - idle_starttime);
       idle_starttime = 0;
     }
-    //uint64_t starttime = get_sys_clock();
 
     if(msg->rtype != CL_QRY || CC_ALG == CALVIN) {
       txn_man = get_transaction_manager(msg);
-
       if (CC_ALG != CALVIN && IS_LOCAL(txn_man->get_txn_id())) {
         if (msg->rtype != RTXN_CONT && ((msg->rtype != RACK_PREP) || (txn_man->get_rsp_cnt() == 1))) {
           txn_man->txn_stats.work_queue_time_short += msg->lat_work_queue_time;
@@ -216,14 +222,8 @@ RC WorkerThread::run() {
           txn_man->txn_stats.cc_time_short += msg->lat_cc_time;
           txn_man->txn_stats.msg_queue_time_short += msg->lat_msg_queue_time;
           txn_man->txn_stats.process_time_short += msg->lat_process_time;
-          /*
-          if (msg->lat_network_time/BILLION > 1.0) {
-            printf("%ld %d %ld -> %ld: %f %f\n",msg->txn_id, msg->rtype, msg->return_node_id,get_node_id() ,msg->lat_network_time/BILLION, msg->lat_other_time/BILLION);
-          } 
-          */
           txn_man->txn_stats.network_time_short += msg->lat_network_time;
         }
-
       } else {
           txn_man->txn_stats.clear_short();
       }
@@ -242,6 +242,7 @@ RC WorkerThread::run() {
 
 
       ready_starttime = get_sys_clock();
+      //  第一次执行会成功将ready置为0，第二次则执行失败，因此不会延后
       bool ready = txn_man->unset_ready();
       INC_STATS(get_thd_id(),worker_activate_txn_time,get_sys_clock() - ready_starttime);
       if(!ready) {
@@ -269,6 +270,7 @@ RC WorkerThread::run() {
     INC_STATS(get_thd_id(),worker_release_msg_time,get_sys_clock() - ready_starttime);
 
 	}
+  
   printf("FINISH %ld:%ld\n",_node_id,_thd_id);
   fflush(stdout);
   return FINISH;
@@ -396,7 +398,7 @@ RC WorkerThread::process_rqry(Message * msg) {
 #if CC_ALG == MAAT
           time_table.init(get_thd_id(),txn_man->get_txn_id());
 #endif
-
+  // cout << "process_rqry" << msg->get_txn_id() << "txn_man的txn_id" << txn_man->txn->txn_id <<endl;
   rc = txn_man->run_txn();
 
   // Send response
@@ -457,6 +459,7 @@ uint64_t WorkerThread::get_next_txn_id() {
   return txn_id;
 }
 
+//  处理客户端负载生成的查询，生成事务
 RC WorkerThread::process_rtxn(Message * msg) {
         RC rc = RCOK;
         uint64_t txn_id = UINT64_MAX;
@@ -485,11 +488,12 @@ RC WorkerThread::process_rtxn(Message * msg) {
           INC_STATS(get_thd_id(),local_txn_start_cnt,1);
 
         } else {
+          //  RTXN消息是由终止队列创建的，用于让工作线程进行事务终止后的消息统计
             txn_man->txn_stats.restart_starttime = get_sys_clock();
           DEBUG("RESTART %ld %f %lu\n",txn_man->get_txn_id(),simulation->seconds_from_start(get_sys_clock()),txn_man->txn_stats.starttime);
         }
-
-          // Get new timestamps
+          //  如果是mvcc并发控制，也需要使用时间戳
+          // Get new timestamps  
           if(is_cc_new_timestamp()) {
             txn_man->set_timestamp(get_next_ts());
 					}
@@ -585,7 +589,42 @@ RC WorkerThread::process_calvin_rtxn(Message * msg) {
   return RCOK;
 
 }
+// RC WorkerThread::process_snapshot_msg(Message * msg) {
+//   SnapshotMessage *snapshot_msg = (SnapshotMessage*) msg;
+//   migration_manager->copyRowData()
+//   _wl->copyRowData(snapshot_msg->table_name, snapshot_msg->part_id, snapshot_msg->buffer_size, snapshot_msg->tuple_count, snapshot_msg->snapshot_buffer);
+  
+//   return RCOK;
+//   // msg
+// }
+// RC WorkerThread::process_snapshot_ack(Message * msg) {
+//   SnapshotAckMessage * snapshot_ack = (SnapshotAckMessage*) msg;
+//   if (snapshot_ack->copy_success) {
+//     LiveMigrationAckMessage * msg = (LiveMigrationAckMessage*) Message::create_message(MIGRATION_ACK);
+//     msg->finish = true;
+//     msg->live_migration_stage = 1;
+//     msg->return_node_id = g_node_id;
+//     int client_node_id = 2;// 暂时这样写
+//     msg_queue.enqueue(get_thd_id(), msg, client_node_id);
+//   } else {
+//     cout <<"迁移一阶段失败，需要重新启动" << endl;
+//   }
+//   return RCOK;
+// }
 
+RC WorkerThread::process_migration_msg(Message * msg) {
+  if (msg->get_rtype() == MIGRATION_MSG) {
+    LiveMigrationMessage* lm = (LiveMigrationMessage*)msg;
+    cout << &lm->finish << "finish";
+    // cout << lm->finish << " " << lm->table_name << " lm" << endl;
+  }
+  cout << "Message type: " << typeid(*msg).name() << endl;
+  
+  migration_manager->run_live_migration_stage_1(get_thd_id(), msg);
+  // LiveMigrationMessage * migration_msg = (LiveMigrationMessage*) msg;
+  // migration_manager->SnapshotRowCopy(get_thd_id(), migration_msg->table_name, migration_msg->dest_id, migration_msg->part_id);
+  return RCOK;
+}
 
 bool WorkerThread::is_cc_new_timestamp() {
   return (CC_ALG == MVCC || CC_ALG == TIMESTAMP);

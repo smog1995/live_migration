@@ -40,6 +40,8 @@ public :
 	RC init_schema(const char * schema_file);
 	RC get_txn_man(TxnManager *& txn_manager);
 	int key_to_part(uint64_t key);
+  void transportSnapshot(uint64_t thd_id, char* table_name, int dest_id,int part_id){}
+  void copyRowData(char* table_name, int part_id, int tuple_count, char* row_data){}
 	INDEX * the_index;
 	table_t * the_table;
 private:

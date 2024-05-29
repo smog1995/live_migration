@@ -21,6 +21,7 @@
 #include "thread.h"
 #include "table.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "tpcc_helper.h"
 #include "row.h"
@@ -28,7 +29,10 @@
 #include "txn.h"
 #include "mem_alloc.h"
 #include "tpcc_const.h"
-
+#include "message.h"
+#include "msg_queue.h"
+#include "catalog.h"
+class Catalog;
 RC TPCCWorkload::init() {
 	Workload::init();
 	//char * cpath = getenv("GRAPHITE_HOME");
@@ -53,13 +57,15 @@ RC TPCCWorkload::init() {
 	
   printf("Initializing schema... ");
   fflush(stdout);
-	init_schema( path.c_str() );
+	init_schema(path.c_str());
   printf("Done\n");
   printf("Initializing table... ");
   fflush(stdout);
 	init_table();
   printf("Done\n");
   fflush(stdout);
+  i_warehouse->print_index_structure();
+//   i_item->print_index_structure();
 	return RCOK;
 }
 
@@ -351,6 +357,8 @@ void TPCCWorkload::init_tab_stock(int id, uint64_t wid) {
     */
 		row->set_value(S_DATA, s_data);
 #endif
+		//  参数4是part_id，表示插入的数据是属于哪个分区的
+		// wh_to_part(wid)的wid又等于g_node_id，g_node_id为常数0，代表属于本地
 		index_insert(i_stock, stockKey(sid, wid), row, wh_to_part(wid));
 	}
 }
@@ -598,8 +606,8 @@ void * TPCCWorkload::threadInitCust(void * This) {
       continue;
 		for (uint64_t did = 1; did <= g_dist_per_wh; did++) {
 			wl->init_tab_cust(id,did, wid);
-    }
-  }
+    	}
+  	}
 	printf("CUSTOMER %d Done\n",((thr_args *)This)->id);
 	return NULL;
 }
@@ -630,5 +638,87 @@ void * TPCCWorkload::threadInitOrder(void * This) {
 	return NULL;
 }
 
+void TPCCWorkload::transportSnapshot(uint64_t thd_id, char* table_name, int dest_id,int part_id) {
+	cout << "开始传输快照" << endl;
+	string table_name_str(table_name, strlen(table_name));
+	string index_name(table_name_str);
+	index_name += "_IDX";
+	auto table = tables[table_name];
+	auto iter = indexes[index_name]->getBeginIterator(part_id);
+	char * buffer = new char[2048];
+	uint32_t ptr = 0;
+	int tuple_count = 0;
+	row_t *row;
+	while(!iter.IsEnd()) {
+		cout << "TPCC_WORKLOAD发送快照" << endl; 
+		std::pair<uint64_t, itemid_t*> pair = *iter;
+		++iter;
+		uint64_t key = pair.first;
+		cout << key << "key" << endl;
+		row = (row_t*) pair.second->location;
+		if (ptr + row->get_tuple_size() >= 2048) {
+			cout << "当前快照缓冲区已满，发送" << endl;
+			SnapshotMessage* msg = (SnapshotMessage*) Message::create_message(SNAPSHOT_MSG);
+			msg->tuple_count = tuple_count;
+			// msg->buffer_size = PADDING_FOUR(ptr);
+			// msg->table_name = new char[msg->table_name_size];
+			memcpy(msg->table_name, table_name, strlen(table_name));
+			memcpy(msg->snapshot_buffer, buffer, MIGRATION_BUFFER_SIZE);
+			msg_queue.enqueue(thd_id, msg, dest_id); 
+			ptr = 0;
+			tuple_count = 0;
+		}
+		COPY_BUF(buffer, key, ptr);
+		COPY_BUF_SIZE(buffer, *row->get_data(), ptr, row->get_tuple_size());
+		cout << strlen(buffer) << "buffer大小" << ptr;
+		// COPY_BUF_SIZE(buffer, *row->get_data(), ptr, row->get_tuple_size());
+		++tuple_count;
+	}
+	if (ptr != 0) { //  最后一次可能没发送出去
+		cout << table_name << " 最后一次发送" << endl;
+		SnapshotMessage* msg = (SnapshotMessage*) Message::create_message(SNAPSHOT_MSG);
+		msg->tuple_count = tuple_count;
+		// msg->buffer_size = PADDING_FOUR(ptr);
+		memcpy(msg->table_name, table_name, strlen(table_name));
+		// msg->snapshot_buffer = (char*)mem_allocator.alloc(msg->buffer_size);
+		memcpy(msg->snapshot_buffer, buffer, MIGRATION_BUFFER_SIZE);
+		msg_queue.enqueue(thd_id, msg, dest_id); 
+		// cout << strlen(msg->snapshot_buffer) << endl;
+	}
+	delete[] buffer;
+}
+
+void TPCCWorkload::copyRowData(char* table_name, int part_id, int tuple_count, char* row_data) {
+	row_t* row;
+	// cout<< "crd";
+	uint64_t row_id = 0; //  不使用
+	auto table = tables[table_name];
+	string index_name(table_name);
+	index_name += "_IDX";
+	uint64_t ptr = 0;
+	int i = 0;
+	cout << "copyRowData" << tuple_count;
+	cout << (!table) <<"为空？"<< (table->get_schema()->get_tuple_size())<< endl;
+	cout << row_data << endl;
+	int tuple_size = table->get_schema()->get_tuple_size();
+	while (i < tuple_count) {
+		cout <<  "插入" ;
+		table->get_new_row(row, part_id, row_id);
+		uint64_t key;
+		COPY_VAL(key, row_data, ptr);
+		row->set_data(row_data + ptr);
+		ptr += tuple_size;
+		index_insert(indexes[index_name], key, row, part_id);
+		++i;
+	}
+}
+                                                         
 
 
+void TPCCWorkload::printTable() {
+	// 目前只打印一个表
+	cout << "wl printTable" <<endl;
+	string index_name("WAREHOUSE_IDX");
+	auto index = indexes[index_name];
+	index->print_index_structure();
+}

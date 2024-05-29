@@ -21,7 +21,7 @@
 
 class Workload;
 class Message;
-
+class MigrationManager;
 class WorkerThread : public Thread {
 public:
     RC run();
@@ -49,6 +49,9 @@ public:
     RC process_log_msg(Message * msg);
     RC process_log_msg_rsp(Message * msg);
     RC process_log_flushed(Message * msg);
+    // RC process_snapshot_msg(Message* msg);
+    // RC process_snapshot_ack(Message * msg);
+    RC process_migration_msg(Message * msg);
     RC init_phase();
     uint64_t get_next_txn_id();
     bool is_cc_new_timestamp();
@@ -58,7 +61,7 @@ private:
     ts_t        _curr_ts;
     ts_t        get_next_ts();
     TxnManager * txn_man;
-
+    MigrationManager* migration_manager;
 
 };
 

@@ -79,7 +79,8 @@ public:
   Message * sched_dequeue(uint64_t thd_id); 
   void sequencer_enqueue(uint64_t thd_id, Message * msg); 
   Message * sequencer_dequeue(uint64_t thd_id); 
-
+  void migration_enqueue(Message * msg, bool busy);
+  Message * migration_dequeue();
   uint64_t get_cnt() {return get_wq_cnt() + get_rem_wq_cnt() + get_new_wq_cnt();}
   uint64_t get_wq_cnt() {return 0;}
   //uint64_t get_wq_cnt() {return work_queue.size();}
@@ -94,6 +95,7 @@ private:
   boost::lockfree::queue<work_queue_entry* > * new_txn_queue;
   boost::lockfree::queue<work_queue_entry* > * seq_queue;
   boost::lockfree::queue<work_queue_entry* > ** sched_queue;
+  boost::lockfree::queue<work_queue_entry* > *migration_work_queue;
   uint64_t sched_ptr;
   BaseQuery * last_sched_dq;
   uint64_t curr_epoch;

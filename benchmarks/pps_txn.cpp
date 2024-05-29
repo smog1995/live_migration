@@ -23,6 +23,7 @@
 #include "table.h"
 #include "row.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "transport.h"
 #include "msg_queue.h"

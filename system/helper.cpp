@@ -46,6 +46,7 @@ int get_thdid_from_txnid(uint64_t txnid) {
 }
 
 uint64_t get_part_id(void * addr) {
+  // printf("物理地址空间：%ld", (uint64_t)addr);
 	return ((uint64_t)addr / PAGE_SIZE) % g_part_cnt; 
 }
 

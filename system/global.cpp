@@ -57,6 +57,8 @@ Client_txn client_man;
 Sequencer seq_man;
 Logger logger;
 TimeTable time_table;
+// MigrationManager migration_manager;
+
 
 bool volatile warmup_done = false;
 bool volatile enable_thread_mem_pool = false;
@@ -116,7 +118,7 @@ UInt32 g_total_thread_cnt = g_thread_cnt + g_rem_thread_cnt + g_send_thread_cnt 
 #else
 UInt32 g_total_thread_cnt = g_thread_cnt + g_rem_thread_cnt + g_send_thread_cnt + g_abort_thread_cnt + g_logger_thread_cnt;
 #endif
-UInt32 g_total_client_thread_cnt = g_client_thread_cnt + g_client_rem_thread_cnt + g_client_send_thread_cnt;
+UInt32 g_total_client_thread_cnt = g_client_thread_cnt + g_client_rem_thread_cnt + g_client_send_thread_cnt + g_client_migration_thread_cnt;
 UInt32 g_total_node_cnt = g_node_cnt + g_client_node_cnt + g_repl_cnt*g_node_cnt;
 UInt64 g_synth_table_size = SYNTH_TABLE_SIZE;
 UInt32 g_req_per_query = REQ_PER_QUERY;
@@ -127,6 +129,7 @@ UInt32 g_client_node_cnt = CLIENT_NODE_CNT;
 UInt32 g_client_thread_cnt = CLIENT_THREAD_CNT;
 UInt32 g_client_rem_thread_cnt = CLIENT_REM_THREAD_CNT;
 UInt32 g_client_send_thread_cnt = CLIENT_SEND_THREAD_CNT;
+UInt32 g_client_migration_thread_cnt = CLIENT_MIGRATION_THREAD_CNT;
 UInt32 g_servers_per_client = 0;
 UInt32 g_clients_per_server = 0;
 UInt32 g_server_start_node = 0;

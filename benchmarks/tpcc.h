@@ -21,7 +21,6 @@
 #include "txn.h"
 #include "query.h"
 #include "row.h"
-
 class TPCCQuery;
 class TPCCQueryMessage;
 struct Item_no;
@@ -58,6 +57,9 @@ public:
 	RC init_table();
 	RC init_schema(const char * schema_file);
 	RC get_txn_man(TxnManager *& txn_manager);
+	void transportSnapshot(uint64_t thd_id, char* table_name, int dest_id,int part_id);
+	void copyRowData(char* table_name, int part_id, int tuple_count, char* row_data);
+	void printTable();
 	table_t * 		t_warehouse;
 	table_t * 		t_district;
 	table_t * 		t_customer;
@@ -109,6 +111,7 @@ private:
 	static void * threadInitCust(void * This);
 	static void * threadInitHist(void * This);
 	static void * threadInitOrder(void * This);
+	
 };
 
   struct thr_args{
