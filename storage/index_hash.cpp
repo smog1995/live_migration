@@ -99,7 +99,6 @@ RC IndexHash::index_insert_nonunique(idx_key_t key, itemid_t * item, int part_id
 	return rc;
 }
 
-//  实现很简单，每个
 RC IndexHash::index_read(idx_key_t key, itemid_t * &item, int part_id) {
 	uint64_t bkt_idx = hash(key);
 	assert(bkt_idx < _bucket_cnt_per_part);
@@ -145,7 +144,6 @@ RC IndexHash::index_read(idx_key_t key, itemid_t * &item,
 	// 1. get the sh latch
 //	get_latch(cur_bkt);
 
-	
 	cur_bkt->read_item(key, item);
 	
 	// 3. release the latch
@@ -174,6 +172,7 @@ void BucketHeader::insert_item(idx_key_t key,
 		itemid_t * item, 
 		int part_id) 
 {
+
 	BucketNode * cur_node = first_node;
 	BucketNode * prev_node = NULL;
 	while (cur_node != NULL) {
@@ -250,25 +249,4 @@ void BucketHeader::read_item(idx_key_t key, uint32_t count, itemid_t * &item)
     M_ASSERT_V(cur_node != NULL, "Key does not exist! %ld\n",key);
     assert(cur_node->key == key);
 	item = cur_node->items;
-}
-
-
-void IndexHash::print_index_structure() {
-	
-	for (int i = 0; i < _bucket_cnt; ++i) {
-		BucketHeader * cur_bkt = &_buckets[0][i];
-		printf("第%d个bucket:", i);
-		BucketNode *cur_node = cur_bkt->first_node;
-		while (cur_node) {
-			printf("[key:%ld ,item:[", cur_node->key);
-			itemid_t * cur_item = cur_node->items;
-			while(cur_item && cur_item->valid) {
-				printf("%d ",cur_item->valid);
-				cur_item = cur_item->next;
-			}
-			printf("]\t\t");
-			cur_node = cur_node->next;
-		}
-		printf("\n");
-	}
 }

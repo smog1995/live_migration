@@ -29,6 +29,7 @@ void QWorkQueue::init() {
   work_queue = new boost::lockfree::queue<work_queue_entry* > (0);
   new_txn_queue = new boost::lockfree::queue<work_queue_entry* >(0);
   sched_queue = new boost::lockfree::queue<work_queue_entry* > * [g_node_cnt];
+  migration_work_queue = new boost::lockfree::queue<work_queue_entry* >(0);
   for ( uint64_t i = 0; i < g_node_cnt; i++) {
     sched_queue[i] = new boost::lockfree::queue<work_queue_entry* > (0);
   }
@@ -232,3 +233,37 @@ Message * QWorkQueue::dequeue(uint64_t thd_id) {
   return msg;
 }
 
+void QWorkQueue::migration_enqueue(Message * msg, bool busy) {
+  uint64_t starttime = get_sys_clock();
+  assert(msg);
+  work_queue_entry * entry = (work_queue_entry*)mem_allocator.align_alloc(sizeof(work_queue_entry));
+  entry->msg = msg;
+  entry->rtype = msg->rtype;
+  entry->txn_id = msg->txn_id;
+  entry->batch_id = msg->batch_id;
+  entry->starttime = get_sys_clock();
+  assert(ISCLIENT);
+  DEBUG("Work Enqueue (%ld,%ld) %d\n",entry->txn_id,entry->batch_id,entry->rtype);
+
+  uint64_t mtx_wait_starttime = get_sys_clock();
+  while(!migration_work_queue->push(entry) && !simulation->is_done()) {}
+  // INC_STATS()
+  if (busy) {
+    cout << "busy";
+  }
+}
+
+Message * QWorkQueue::migration_dequeue() {
+  uint64_t starttime = get_sys_clock();
+  assert(ISCLIENT);
+  Message * msg = NULL;
+  work_queue_entry * entry = NULL;
+  uint64_t mtx_wait_starttime = get_sys_clock();
+  bool valid = migration_work_queue->pop(entry);
+  if (valid) {
+    msg = entry->msg;
+    assert(msg);
+    mem_allocator.free(entry,sizeof(work_queue_entry));
+  }
+  return msg;
+}

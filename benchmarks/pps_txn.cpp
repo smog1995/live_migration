@@ -23,6 +23,7 @@
 #include "table.h"
 #include "row.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "transport.h"
 #include "msg_queue.h"
@@ -192,14 +193,14 @@ RC PPSTxnManager::acquire_locks() {
 
         index = _wl->i_supplies;
         int count = 0;
-        // item = index_read(index, supplier_key, partition_id_product,count);
+        item = index_read(index, supplier_key, partition_id_product,count);
         while (item != NULL) {
             count++;
             row_t * row = ((row_t *)item->location);
             rc2 = get_lock(row,RD);
             if(rc2 != RCOK)
               rc = rc2;
-            // item = index_read(index, supplier_key, partition_id_product,count);
+            item = index_read(index, supplier_key, partition_id_product,count);
         }
       }
       for (uint64_t i = 0; i < pps_query->part_keys.size(); i++) {

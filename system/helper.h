@@ -188,7 +188,6 @@
 			UInt32 padsize = sizeof(type) * (scale); \
 			if (g_mem_pad && padsize % CL_SIZE != 0) \
 				padsize += CL_SIZE - padsize % CL_SIZE; \
-				//  padsize以CL_SIZE来对齐大小，每一个name分配的padsize都是以CL_SIZE为单位
 			name[i] = (type *) mem_allocator.alloc(padsize); \
 			for (UInt32 j = 0; j < scale; j++) \
 				new (&name[i][j]) type(); \

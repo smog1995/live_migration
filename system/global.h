@@ -47,6 +47,7 @@
 #include "txn_table.h"
 #include "logger.h"
 #include "sim_manager.h"
+// #include "migration_manager.h"
 //#include "maat.h"
 
 using namespace std;
@@ -76,6 +77,8 @@ class Client_txn;
 class Sequencer;
 class Logger;
 class TimeTable;
+// class MigrationManager;
+
 
 typedef uint32_t UInt32;
 typedef int32_t SInt32;
@@ -111,7 +114,7 @@ extern Client_txn client_man;
 extern Sequencer seq_man;
 extern Logger logger;
 extern TimeTable time_table;
-
+// extern MigrationManager migration_manager;
 extern bool volatile warmup_done;
 extern bool volatile enable_thread_mem_pool;
 extern pthread_barrier_t warmup_bar;
@@ -122,6 +125,7 @@ extern pthread_barrier_t warmup_bar;
 extern UInt32 g_client_thread_cnt;
 extern UInt32 g_client_rem_thread_cnt;
 extern UInt32 g_client_send_thread_cnt;
+extern UInt32 g_client_migration_thread_cnt;
 extern UInt32 g_client_node_cnt;
 extern UInt32 g_servers_per_client;
 extern UInt32 g_clients_per_server;
@@ -259,7 +263,13 @@ enum RemReqType {INIT_DONE=0,
     LOG_MSG_RSP,
     LOG_FLUSHED,
     CALVIN_ACK,
-    NO_MSG};
+    NO_MSG,
+    // live_migration
+    SNAPSHOT_MSG,
+    SNAPSHOT_ACK,
+    MIGRATION_MSG,
+    MIGRATION_ACK
+    };
 
 // Calvin
 enum CALVIN_PHASE {CALVIN_RW_ANALYSIS=0,CALVIN_LOC_RD,CALVIN_SERVE_RD,CALVIN_COLLECT_RD,CALVIN_EXEC_WR,CALVIN_DONE};
@@ -304,6 +314,8 @@ enum TsType {R_REQ = 0, W_REQ, P_REQ, XP_REQ};
 #define IS_LOCAL(tid) (tid % g_node_cnt == g_node_id || CC_ALG == CALVIN)
 #define IS_REMOTE(tid) (tid % g_node_cnt != g_node_id || CC_ALG == CALVIN)
 #define IS_LOCAL_KEY(key) (key % g_node_cnt == g_node_id)
+// #define PADDING_FOUR(ptr) (ptr + (4 - ptr % 4))   //  以4，内存对齐
+
 
 /*
 #define GET_THREAD_ID(id)	(id % g_thread_cnt)
@@ -319,8 +331,10 @@ enum TsType {R_REQ = 0, W_REQ, P_REQ, XP_REQ};
 // index structure for specific purposes. (e.g. non-primary key access should use hash)
 #if (INDEX_STRUCT == IDX_BTREE)
 #define INDEX		index_btree
-#else  // IDX_HASH
+#elif (INDEX_STRUCT == IDX_HASH)
 #define INDEX		IndexHash
+#else
+#define INDEX       MigrationIndexHash
 #endif
 
 /************************************************/

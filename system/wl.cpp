@@ -20,6 +20,7 @@
 #include "row.h"
 #include "table.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "catalog.h"
 #include "mem_alloc.h"
@@ -39,7 +40,7 @@ RC Workload::init_schema(const char * schema_file) {
 		if (line.compare(0, 6, "TABLE=") == 0) {
 			string tname(&line[6]);
 			void * tmp = new char[CL_SIZE * 2 + sizeof(Catalog)];
-            schema = (Catalog *) ((UInt64)tmp + CL_SIZE);
+      schema = (Catalog *) ((UInt64)tmp + CL_SIZE);
 			getline(fin, line);
 			int col_count = 0;
 			// Read all fields for this table.
@@ -83,68 +84,86 @@ RC Workload::init_schema(const char * schema_file) {
 			}
 			
 			string tname(items[0]);
+      size_t tname_len = 0;
 			int field_cnt = items.size() - 1;
 			uint64_t * fields = new uint64_t [field_cnt];
 			for (int i = 0; i < field_cnt; i++) 
 				fields[i] = atoi(items[i + 1].c_str());
-			INDEX * index = new INDEX;
+      INDEX * index = new INDEX;
 	    int part_cnt __attribute__ ((unused));
 			part_cnt = (CENTRAL_INDEX)? 1 : g_part_cnt;
 
       uint64_t table_size = g_synth_table_size;
 #if WORKLOAD == TPCC
+      // 表的数量（指表的分区数量）
       if ( !tname.compare(1, 9, "WAREHOUSE") ) {
+        tname_len = 9;
         table_size = g_num_wh / g_part_cnt;
         printf("WAREHOUSE size %ld\n",table_size);
       } else if ( !tname.compare(1, 8, "DISTRICT") ) {
+        tname_len = 8;
         table_size = g_num_wh / g_part_cnt * g_dist_per_wh;
         printf("DISTRICT size %ld\n",table_size);
       } else if ( !tname.compare(1, 8, "CUSTOMER") ) {
+        tname_len = 8;
         table_size = g_num_wh / g_part_cnt * g_dist_per_wh * g_cust_per_dist;
         printf("CUSTOMER size %ld\n",table_size);
       } else if ( !tname.compare(1, 7, "HISTORY") ) {
+        tname_len = 7;
         table_size = g_num_wh / g_part_cnt * g_dist_per_wh * g_cust_per_dist;
         printf("HISTORY size %ld\n",table_size);
       } else if ( !tname.compare(1, 5, "ORDER") ) {
+        tname_len = 5;
         table_size = g_num_wh / g_part_cnt * g_dist_per_wh * g_cust_per_dist;
         printf("ORDER size %ld\n",table_size);
       } else if ( !tname.compare(1, 4, "ITEM") ) {
+        tname_len = 4;
         table_size = g_max_items;
         printf("ITEM size %ld\n",table_size);
       } else if ( !tname.compare(1, 5, "STOCK") ) {
+        tname_len = 5;
         table_size = g_num_wh / g_part_cnt * g_max_items;
         printf("STOCK size %ld\n",table_size);
       }
 #elif WORKLOAD == PPS
       if ( !tname.compare(1, 5, "PARTS") ) {
+        tname_len = 5;
         table_size = MAX_PPS_PART_KEY;
       }
       else if ( !tname.compare(1, 8, "PRODUCTS") ) {
+        tname_len = 8;
         table_size = MAX_PPS_PRODUCT_KEY;
       }
       else if ( !tname.compare(1, 9, "SUPPLIERS") ) {
+        tname_len = 9;
         table_size = MAX_PPS_SUPPLIER_KEY;
       }
       else if ( !tname.compare(1, 8, "SUPPLIES") ) {
+        tname_len = 8;
         table_size = MAX_PPS_PRODUCT_KEY;
       }
       else if ( !tname.compare(1, 4, "USES") ) {
+        tname_len = 4;
         table_size = MAX_PPS_SUPPLIER_KEY;
       }
 #else
       table_size = g_synth_table_size / g_part_cnt;
 #endif
-
 #if INDEX_STRUCT == IDX_HASH
-			index->init(1024, tables[tname], table_size);
+			index->init(1024, tables[tname.substr(1,tname_len)], table_size);
 			//index->init(part_cnt*1024, tables[tname], table_size);
+#elif INDEX_STRUCT == IDX_MIGRATION_HASH      
+      index->init(1024, tables[tname.substr(1,tname_len)], table_size);
 #else
-			index->init(part_cnt, tables[tname]);
+			index->init(part_cnt, tables[tname.substr(1,tname_len)]);
 #endif
 			indexes[iname] = index;
 		}
+    // cout << "打印表的schema" ;
+    // schema->print_schema();
     }
 	fin.close();
+  
 	return RCOK;
 }
 

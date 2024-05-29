@@ -23,8 +23,10 @@
 
 void table_t::init(Catalog * schema) {
 	this->table_name = schema->table_name;
+	// cout << "初始化表" << this->table_name;
 	this->table_id = schema->table_id;
 	this->schema = schema;
+	// cout << "schema:" << this->get_schema()->get_tuple_size();
 	cur_tab_size = new uint64_t; 
 	// isolate cur_tab_size with other parameters.
 	// Because cur_tab_size is frequently updated, causing false 
@@ -43,12 +45,13 @@ RC table_t::get_new_row(row_t *& row) {
 RC table_t::get_new_row(row_t *& row, uint64_t part_id, uint64_t &row_id) {
 	RC rc = RCOK;
   DEBUG_M("table_t::get_new_row alloc\n");
+//   cout << "table的get_new_row";
 	void * ptr = mem_allocator.alloc(sizeof(row_t));
 	assert (ptr != NULL);
 	
 	row = (row_t *) ptr;
 	rc = row->init(this, part_id, row_id);
 	row->init_manager(row);
-
+	// cout << "table的get_new_row结束" << endl; 
 	return rc;
 }

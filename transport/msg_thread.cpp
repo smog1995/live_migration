@@ -99,6 +99,7 @@ void MessageThread::run() {
   }
 
   uint64_t copy_starttime = get_sys_clock();
+  //  通过该函数将该数据放到服务器消息缓冲区中
   msg->copy_to_buf(&(sbuf->buffer[sbuf->ptr]));
   INC_STATS(_thd_id,msg_copy_output_time,get_sys_clock() - copy_starttime);
   DEBUG("%ld Buffered Msg %d, (%ld,%ld) to %ld\n",_thd_id,msg->rtype,msg->txn_id,msg->batch_id,dest_node_id);
@@ -113,6 +114,5 @@ void MessageThread::run() {
 
   check_and_send_batches();
   INC_STATS(_thd_id,mtx[10],get_sys_clock() - starttime);
-
 }
 

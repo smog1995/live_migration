@@ -23,6 +23,7 @@
 #include "table.h"
 #include "row.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "tpcc_const.h"
 #include "transport.h"
@@ -137,6 +138,7 @@ RC TPCCTxnManager::acquire_locks() {
       if(GET_NODE_ID(part_id_w) == g_node_id) {
       // WH
         index = _wl->i_warehouse;
+        // cout << "acquire_locks：调用index_read";
         item = index_read(index, w_id, part_id_w);
         row_t * row = ((row_t *)item->location);
         rc2 = get_lock(row,g_wh_update? WR:RD);
@@ -481,8 +483,9 @@ RC TPCCTxnManager::run_txn_state() {
             break;
     case TPCC_FIN :
         state = TPCC_FIN;
-        if(tpcc_query->rbk)
-            return Abort;
+        if(tpcc_query->rbk) {
+              return Abort;
+        }
             //return finish(tpcc_query,false);
         break;
     default:
@@ -617,6 +620,7 @@ inline RC TPCCTxnManager::run_payment_4(uint64_t w_id, uint64_t d_id,uint64_t c_
 		// XXX: the list is not sorted. But let's assume it's sorted... 
 		// The performance won't be much different.
 		INDEX * index = _wl->i_customer_last;
+      // cout << "run_payment_4的index_read";
 		item = index_read(index, key, wh_to_part(c_w_id));
 		assert(item != NULL);
 		
@@ -656,6 +660,7 @@ inline RC TPCCTxnManager::run_payment_4(uint64_t w_id, uint64_t d_id,uint64_t c_
 		+======================================================================*/
 		key = custKey(c_id, c_d_id, c_w_id);
 		INDEX * index = _wl->i_customer_id;
+      // cout << "run_payment_4的index_read";
 		item = index_read(index, key, wh_to_part(c_w_id));
 		assert(item != NULL);
 		r_cust = (row_t *) item->location;
@@ -722,6 +727,7 @@ inline RC TPCCTxnManager::new_order_0(uint64_t w_id, uint64_t d_id, uint64_t c_i
 	+========================================================================*/
 	key = w_id;
 	INDEX * index = _wl->i_warehouse; 
+    // cout << "new_order_0的index_read";
 	item = index_read(index, key, wh_to_part(w_id));
 	assert(item != NULL);
 	row_t * r_wh = ((row_t *)item->location);

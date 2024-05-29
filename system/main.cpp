@@ -309,10 +309,8 @@ int main(int argc, char* argv[])
   pthread_create(&p_thds[id++], &attr, run_thread, (void *)&calvin_seq_thds[0]);
 #endif
 
-
 	for (uint64_t i = 0; i < all_thd_cnt ; i++) 
-		pthread_join(p_thds[i], NULL);
-
+    pthread_join(p_thds[i], NULL);
 	endtime = get_server_clock();
 	
   fflush(stdout);

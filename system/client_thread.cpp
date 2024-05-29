@@ -61,6 +61,11 @@ RC ClientThread::run() {
 #endif
 		//uint32_t next_node = iters++ % g_node_cnt;
     progress_stats();
+
+    // myt add: 生成快照传输消息
+    
+
+
     int32_t inf_cnt;
 		uint32_t next_node = (((iters++) * g_client_thread_cnt) + _thd_id )% g_servers_per_client;
 		uint32_t next_node_id = next_node + g_server_start_node;

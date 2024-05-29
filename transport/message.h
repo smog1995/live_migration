@@ -87,26 +87,103 @@ public:
   void release() {}
 };
 
+class LiveMigrationMessage : public Message {
+public:
+  void init() {}
+  void copy_from_buf(char * buf);
+  void copy_to_buf(char* buf);
+  void copy_from_txn(TxnManager * txn){}
+  void copy_to_txn(TxnManager * txn){}
+  uint64_t get_size(){
+    uint64_t size = Message::mget_size();
+    size += sizeof(finish) + sizeof(live_migration_stage) + sizeof(migration_dest_id) + sizeof(part_id) 
+            + sizeof(table_name);
+    return size;
+  }
+  void release();
+  // 1代表第一阶段快照传输，2代表第二阶段异步传输，3代表同步传输
+  int finish;
+  int live_migration_stage;
+  int migration_dest_id; //  要迁移到哪个目标节点,源节点在入消息队列时已指定
+  int part_id;
+  char table_name[TABLE_NAME_SIZE];
+};
+
+class LiveMigrationAckMessage : public Message {
+public:
+  uint8_t live_migration_stage;
+  int finish;
+  void init() {}
+  void copy_from_buf(char * buf) {
+    mcopy_from_buf(buf);
+    size_t ptr = Message::mget_size();
+    COPY_VAL(live_migration_stage, buf, ptr);
+    COPY_VAL(finish, buf, ptr);
+  }
+  void copy_to_buf(char* buf) {
+    mcopy_to_buf(buf);
+    size_t ptr = Message::mget_size();
+    COPY_BUF(buf, live_migration_stage, ptr);
+    COPY_BUF(buf, finish, ptr);
+  }
+  void copy_from_txn(TxnManager * txn) {}
+  void copy_to_txn(TxnManager * txn) {}
+  uint64_t get_size() {
+    uint64_t size = Message::mget_size();
+    size += sizeof(live_migration_stage) + sizeof(finish);
+    return size;
+  }
+  void release() {}
+};
+
 //  myt add：live migration step1:transport table data
 class SnapshotMessage : public Message {
 public:
-  bool is_finish;
+  int finish;
   int part_id;
-  uint8_t table_name_size;
-  uint32_t tuple_size;
-  uint32_t buffer_size;
-  char* table_name;
-  char* snapshot_buffer;
-  // vector<row_t*> rows;
-  
-  void init() {}
+  // int table_name_size;
+  // int buffer_size;
+  int tuple_count;
+  char table_name[TABLE_NAME_SIZE];
+  char snapshot_buffer[MIGRATION_BUFFER_SIZE];
+  void init() {
+  }
   void copy_from_buf(char * buf);
   void copy_to_buf(char * buf);
-  void copy_from_txn(TxnManager * txn) {};
-  void copy_to_txn(TxnManager * txn) {};
-  uint64_t get_size();
+    void copy_from_txn(TxnManager * txn) {}
+  void copy_to_txn(TxnManager * txn) {}
+  uint64_t get_size() {
+    uint64_t size = Message::mget_size();
+    size += sizeof(finish) + sizeof(part_id) 
+            + sizeof(tuple_count) + sizeof(table_name) + sizeof(snapshot_buffer);
+    return size;
+  }
   void release();
   
+};
+
+class SnapshotAckMessage : public Message {
+public:
+  int copy_success;
+  void init() {}
+  void copy_from_buf(char * buf) {
+    mcopy_from_buf(buf);
+    size_t ptr = Message::mget_size();
+    COPY_VAL(copy_success, buf, ptr);
+  }
+  void copy_to_buf(char * buf) {
+    mcopy_to_buf(buf);
+    size_t ptr = Message::mget_size();
+    COPY_BUF(buf, copy_success, ptr);
+  }
+  void copy_from_txn(TxnManager * txn) {}
+  void copy_to_txn(TxnManager * txn) {}
+  uint64_t get_size() {
+    uint64_t size = Message::mget_size();
+    size += sizeof(copy_success);
+    return size;
+  }
+  void release(){}
 };
 
 class FinishMessage : public Message {

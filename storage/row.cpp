@@ -85,6 +85,7 @@ const char * row_t::get_table_name() {
 	return get_table()->get_table_name(); 
 };
 uint64_t row_t::get_tuple_size() {
+	// cout << " get_tuple_isze";
 	return get_schema()->get_tuple_size();
 }
 
@@ -158,6 +159,8 @@ char * row_t::get_data() {
 
 void row_t::set_data(char * data) { 
 	int tuple_size = get_schema()->get_tuple_size();
+	// cout <<_primary_key << " ";
+	// cout << "set_data:" << tuple_size << "   ";
 #if SIM_FULL_ROW
 	memcpy(this->data, data, tuple_size);
 #else
@@ -272,6 +275,7 @@ RC row_t::get_row(access_t type, TxnManager * txn, row_t *& row) {
             assert(row->get_table_name() != NULL);
         }
 	}
+	//  对写入操作，我们并不在此刻进行真正的写入，而是在事务管理器的commit函数中执行真正的写
 	if (rc != Abort && CC_ALG == MVCC && type == WR) {
 	    DEBUG_M("row_t::get_row MVCC alloc \n");
 		row_t * newr = (row_t *) mem_allocator.alloc(sizeof(row_t));
@@ -333,7 +337,6 @@ RC row_t::get_row_post_wait(access_t type, TxnManager * txn, row_t *& row) {
     DEBUG_M("row_t::get_row_post_wait MVCC alloc \n");
 		row_t * newr = (row_t *) mem_allocator.alloc(sizeof(row_t));
 		newr->init(this->get_table(), get_part_id());
-
 		newr->copy(row);
 		row = newr;
 	}

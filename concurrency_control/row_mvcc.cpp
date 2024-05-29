@@ -132,9 +132,9 @@ MVReqEntry * Row_mvcc::debuffer_req( TsType type, TxnManager * txn) {
 		}
 		assert(req != NULL);
 		//  出队
-		if (prev_req != NULL)  //  指针不在队头
+		if (prev_req != NULL)  //  链表出队情况1：指针不在队头
 			prev_req->next = req->next;
-		else {   			   //  指针在对头
+		else {   			   //  链表出队情况2：指针在队头
 			assert( req == *queue );
 			*queue = req->next;
 		}
@@ -170,7 +170,6 @@ MVReqEntry * Row_mvcc::debuffer_req( TsType type, TxnManager * txn) {
 			}
 		}
 	}
-	
 	return return_queue;
 }
 
@@ -205,6 +204,7 @@ bool Row_mvcc::conflict(TsType type, ts_t ts) {
 	// else 
 	// 	 if exists writehis between them, NO conflict!!!!
 	// 	 else, CONFLICT!!!
+	//  对于写操作我们会用相同时间戳先插入prew再插入read,这里是不会判断为冲突的
 	//  如果存在读之前先进行了写，则有冲突，
 	ts_t rts;
 	ts_t pts;
@@ -227,6 +227,7 @@ bool Row_mvcc::conflict(TsType type, ts_t ts) {
 		pts = ts;
 		MVHisEntry * his = readhis;
 		// 找到大于该时间戳的时间戳最小的read_history，如果没有找到说明不存在，返回false
+		// 如果找到了，我们
 		while (his != NULL) {
 			if (his->ts > ts) {
 				rts = his->ts;
@@ -239,21 +240,23 @@ bool Row_mvcc::conflict(TsType type, ts_t ts) {
 		assert(rts > pts);
 	}
 	MVHisEntry * whis = writehis;
-	//  存在写版本在prewrite和read之间，那么无冲突（意思应该是，由于prewrite时间戳小于该写版本，因此执行会失败）
+	//  存在写版本在prewrite和read之间，那么不会发生冲突
+	//  原因：我们的
     while (whis != NULL && whis->ts > pts) {
-		if (whis->ts < rts) 
+		if (whis->ts < rts)   //
 			return false;
 		whis = whis->next;
 	}
+	// cout << "冲突！";
 	return true;
 }
 
 RC Row_mvcc::access(TxnManager * txn, TsType type, row_t * row) {
 	RC rc = RCOK;
-	ts_t ts = txn->get_timestamp();
+	ts_t ts = txn->get_timestamp();  ///  写入的时间戳为事务的时间戳
 	uint64_t starttime = get_sys_clock();
 
-	//  这个锁是保证只能一个线程改动mvcc版本链
+	//  这个锁是保证只能一个线程改动mvcc版本链，实际上就是行锁
 	if (g_central_man)
 		glob_manager.lock_row(_row);
 	else
@@ -285,12 +288,14 @@ RC Row_mvcc::access(TxnManager * txn, TsType type, row_t * row) {
 		}
 	} else if (type == P_REQ) {
 		if ( conflict(type, ts) ) { //  prewrite请求冲突，需要终止
+			// cout <<"conflict";
 			rc = Abort;
 		} else if (preq_len < g_max_pre_req){
         DEBUG("buf P_REQ %ld %ld\n",txn->get_txn_id(),_row->get_primary_key());
 			buffer_req(P_REQ, txn);
 			rc = RCOK;
 		} else  {
+			cout << "else情况";
 			rc = Abort;
 		}
 	} else if (type == W_REQ) { //  这才是写请求的最后一步，把prewrite请求从队列中拿出，再进行真正的写
@@ -300,8 +305,8 @@ RC Row_mvcc::access(TxnManager * txn, TsType type, row_t * row) {
         DEBUG("debuf %ld %ld\n",txn->get_txn_id(),_row->get_primary_key());
 		MVReqEntry * req = debuffer_req(P_REQ, txn);
 		assert(req != NULL);
-		return_req_entry(req);
-		update_buffer(txn);
+		return_req_entry(req); //  释放prewrite请求
+		update_buffer(txn); //  这个txn的传参其实只用于运行该事务管理器的线程的时间统计
 	} else if (type == XP_REQ) {
         DEBUG("debuf %ld %ld\n",txn->get_txn_id(),_row->get_primary_key());
 		MVReqEntry * req = debuffer_req(P_REQ, txn);
@@ -345,11 +350,11 @@ RC Row_mvcc::access(TxnManager * txn, TsType type, row_t * row) {
 }
 
 void Row_mvcc::update_buffer(TxnManager * txn) {
-	// 清空此刻最小时间戳prewrite请求之前的所有读请求（这些读请求是因为之前冲突了导致执行失败需要延后执行）
+	// 处理读请求，将其执行
 	MVReqEntry * ready_read = debuffer_req(R_REQ, NULL);
 	MVReqEntry * req = ready_read;
 	MVReqEntry * tofree = NULL;
-
+	// 处理每一个读请求:找到这个读请求能读取到的对应版本（赋值给请求中的事务管理器cur_row)，然后使用txn_table来通知工作线程重启该事务（阻塞->活跃），然后将读请求释放
 	while (req != NULL) {
 		// find the version for the request
 		MVHisEntry * whis = writehis;

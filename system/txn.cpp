@@ -27,6 +27,7 @@
 #include "catalog.h"
 #include "index_btree.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "msg_queue.h"
 #include "pool.h"
 #include "message.h"
@@ -446,6 +447,7 @@ RC TxnManager::abort() {
   if(aborted)
     return Abort;
   DEBUG("Abort %ld\n",get_txn_id());
+  // cout << "终止";
   txn->rc = Abort;
   INC_STATS(get_thd_id(),total_txn_abort_cnt,1);
   txn_stats.abort_cnt++;
@@ -804,6 +806,7 @@ RC TxnManager::get_row(row_t * row, access_t type, row_t *& row_rtn) {
     rc = row->get_row(type, this, access->data);
 
     if (rc == Abort || rc == WAIT) {
+        // cout <<" txn_manager_get_row abort";
         row_rtn = NULL;
         DEBUG_M("TxnManager::get_row(abort) access free\n");
         access_pool.put(get_thd_id(),access);
@@ -885,8 +888,7 @@ RC TxnManager::get_row_post_wait(row_t *& row_rtn) {
 	++txn->row_cnt;
 	if (type == WR)
 		++txn->write_cnt;
-
-
+    
   txn->accesses.add(access);
 	uint64_t timespan = get_sys_clock() - starttime;
 	INC_STATS(get_thd_id(), txn_manager_time, timespan);
