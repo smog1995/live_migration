@@ -149,7 +149,7 @@ RC Row_lock::lock_get(lock_t type, TxnManager * txn, uint64_t* &txnids, int &txn
               DEBUG("abort (%ld,%ld): owners %d, own type %d, req type %d, key %ld %lx\n",txn->get_txn_id(),txn->get_batch_id(),owner_cnt,lock_type,type,_row->get_primary_key(),(uint64_t)_row);
               rc = Abort;
             }
-        } else if (CC_ALG == CALVIN){
+        } else if (CC_ALG == CALVIN) {
             LockEntry * entry = get_entry();
             entry->start_ts = get_sys_clock();
             entry->txn = txn;

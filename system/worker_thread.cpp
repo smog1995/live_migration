@@ -101,6 +101,9 @@ void WorkerThread::process(Message * msg) {
       case MIGRATION_MSG:
         rc = process_migration_msg(msg);
         break;
+      case RTXN_ABORT:
+        rc = process_abort_msg(msg);
+        break;
 			default:
         printf("Msg: %d\n",msg->get_rtype());
         fflush(stdout);
@@ -166,14 +169,13 @@ void WorkerThread::abort() {
 
   DEBUG("ABORT %ld -- %f\n",txn_man->get_txn_id(),(double)get_sys_clock() - run_starttime/ BILLION);
   // TODO: TPCC Rollback here
-
+  msg_queue.enqueue(get_thd_id(),Message::create_message(txn_man,CL_RSP),txn_man->client_id); // myt add:理论上这个也需要发给客户端
   ++txn_man->abort_cnt;
   txn_man->reset();
-
   uint64_t penalty = abort_queue.enqueue(get_thd_id(), txn_man->get_txn_id(),txn_man->get_abort_cnt());
-
+  
   txn_man->txn_stats.total_abort_time += penalty;
-
+  
 }
 
 TxnManager * WorkerThread::get_transaction_manager(Message * msg) {
@@ -244,7 +246,7 @@ RC WorkerThread::run() {
       ready_starttime = get_sys_clock();
       //  第一次执行会成功将ready置为0，第二次则执行失败，因此不会延后
       bool ready = txn_man->unset_ready();
-      INC_STATS(get_thd_id(),worker_activate_txn_time,get_sys_clock() - ready_starttime);
+      INC_STATS(get_thd_id(),worker_activate_txn_time, get_sys_clock() - ready_starttime);
       if(!ready) {
         // Return to work queue, end processing
         work_queue.enqueue(get_thd_id(),msg,true);
@@ -370,14 +372,14 @@ RC WorkerThread::process_rack_rfin(Message * msg) {
 RC WorkerThread::process_rqry_rsp(Message * msg) {
   DEBUG("RQRY_RSP %ld\n",msg->get_txn_id());
   assert(IS_LOCAL(msg->get_txn_id()));
-
+  txn_man->set_rc(RCOK);  // 在等待回复时设置为WAITREM，收到后先设为RCOK（原状态）
   txn_man->txn_stats.remote_wait_time += get_sys_clock() - txn_man->txn_stats.wait_starttime;
 
   if(((QueryResponseMessage*)msg)->rc == Abort) {
     txn_man->start_abort();
     return Abort;
   }
-
+  glob_manager.setUnblockedTxn(txn_man->get_txn_id());
   RC rc = txn_man->run_txn();
   check_if_done(rc);
   return rc;
@@ -392,7 +394,7 @@ RC WorkerThread::process_rqry(Message * msg) {
 
   msg->copy_to_txn(txn_man);
 
-#if CC_ALG == MVCC
+#if CC_ALG == MVCC || CC_ALG == MVCC2PL
   txn_table.update_min_ts(get_thd_id(),txn_man->get_txn_id(),0,txn_man->get_timestamp());
 #endif
 #if CC_ALG == MAAT
@@ -404,6 +406,7 @@ RC WorkerThread::process_rqry(Message * msg) {
   // Send response
   if(rc != WAIT) {
     msg_queue.enqueue(get_thd_id(),Message::create_message(txn_man,RQRY_RSP),txn_man->return_id);
+    // printf("打印");
   }
   return rc;
 }
@@ -429,7 +432,8 @@ RC WorkerThread::process_rtxn_cont(Message * msg) {
   assert(IS_LOCAL(msg->get_txn_id()));
 
   txn_man->txn_stats.local_wait_time += get_sys_clock() - txn_man->txn_stats.wait_starttime;
-
+  txn_man->set_rc(RCOK); //  阻塞时会设置为WAIT，唤醒后重新设为原状态
+  glob_manager.setUnblockedTxn(txn_man->get_txn_id());
   txn_man->run_txn_post_wait();
   RC rc = txn_man->run_txn();
   check_if_done(rc);
@@ -463,10 +467,9 @@ uint64_t WorkerThread::get_next_txn_id() {
 RC WorkerThread::process_rtxn(Message * msg) {
         RC rc = RCOK;
         uint64_t txn_id = UINT64_MAX;
-
         if(msg->get_rtype() == CL_QRY) {
           // This is a new transaction
-
+          // cout << "收到请求" ;
 					// Only set new txn_id when txn first starts
           txn_id = get_next_txn_id();
           msg->txn_id = txn_id;
@@ -486,9 +489,8 @@ RC WorkerThread::process_rtxn(Message * msg) {
           msg->copy_to_txn(txn_man);
           DEBUG("START %ld %f %lu\n",txn_man->get_txn_id(),simulation->seconds_from_start(get_sys_clock()),txn_man->txn_stats.starttime);
           INC_STATS(get_thd_id(),local_txn_start_cnt,1);
-
         } else {
-          //  RTXN消息是由终止队列创建的，用于让工作线程进行事务终止后的消息统计
+          //  RTXN消息由终止队列创建的，用于让工作线程进行事务终止后的消息统计
             txn_man->txn_stats.restart_starttime = get_sys_clock();
           DEBUG("RESTART %ld %f %lu\n",txn_man->get_txn_id(),simulation->seconds_from_start(get_sys_clock()),txn_man->txn_stats.starttime);
         }
@@ -497,8 +499,9 @@ RC WorkerThread::process_rtxn(Message * msg) {
           if(is_cc_new_timestamp()) {
             txn_man->set_timestamp(get_next_ts());
 					}
-#if CC_ALG == MVCC
+#if CC_ALG == MVCC || CC_ALG == MVCC2PL
           txn_table.update_min_ts(get_thd_id(),txn_id,0,txn_man->get_timestamp());
+
 #endif
 
 #if CC_ALG == OCC
@@ -514,10 +517,9 @@ RC WorkerThread::process_rtxn(Message * msg) {
     rc = init_phase();
     if(rc != RCOK)
       return rc;
-
     // Execute transaction
     rc = txn_man->run_txn();
-  check_if_done(rc);
+    check_if_done(rc);
     return rc;
 }
 
@@ -626,8 +628,16 @@ RC WorkerThread::process_migration_msg(Message * msg) {
   return RCOK;
 }
 
+RC WorkerThread::process_abort_msg(Message* msg) {
+  txn_man->abort();
+    // abort();
+    release_txn_man();
+  // 统计下abort数量之类;
+  return RCOK;
+}
+
 bool WorkerThread::is_cc_new_timestamp() {
-  return (CC_ALG == MVCC || CC_ALG == TIMESTAMP);
+  return (CC_ALG == MVCC || CC_ALG == TIMESTAMP || CC_ALG == MVCC2PL);
 }
 
 ts_t WorkerThread::get_next_ts() {
@@ -644,5 +654,7 @@ ts_t WorkerThread::get_next_ts() {
 		return _curr_ts;
 	}
 }
+
+
 
 

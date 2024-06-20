@@ -263,7 +263,7 @@ void MigrationBucketHeader::read_item(idx_key_t key, uint32_t count, itemid_t * 
 
 void MigrationIndexHash::print_index_structure() {
 	IndexIterator iter;
-	cout << "打印索引结构" << endl;
+	// cout << "打印索引结构" << endl;
 	auto schema = table->get_schema();
 	// cout << schem
 	for (int i = 0; i < g_part_cnt; ++i) {

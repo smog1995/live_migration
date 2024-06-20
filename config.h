@@ -32,6 +32,7 @@
 #define PAGE_SIZE         4096 
 #define TABLE_NAME_SIZE 20
 #define MIGRATION_BUFFER_SIZE 2048
+
 #define CL_SIZE           64
 #define CPU_FREQ          2.6
 // enable hardware migration.
@@ -76,10 +77,10 @@
 // Message Passing
 /***********************************************/
 #define TPORT_TYPE TCP
-#define TPORT_PORT 17000
+#define TPORT_PORT 18000
 #define SET_AFFINITY true
 #define TPORT_TYPE TCP
-#define TPORT_PORT 17000
+#define TPORT_PORT 18000
 #define SET_AFFINITY true
 
 #define MAX_TPORT_NAME 128
@@ -101,7 +102,7 @@
 // Concurrency Control
 /***********************************************/
 // WAIT_DIE, NO_WAIT, TIMESTAMP, MVCC, CALVIN, MAAT
-#define CC_ALG MVCC
+#define CC_ALG MVCC2PL
 #define ISOLATION_LEVEL SERIALIZABLE
 #define YCSB_ABORT_MODE false
 
@@ -309,6 +310,7 @@ enum PPSTxnType {PPS_ALL = 0,
 #define CALVIN      10
 #define MAAT      11
 #define WDL           12
+#define MVCC2PL       13
 // TIMESTAMP allocation method.
 #define TS_MUTEX          1
 #define TS_CAS            2

@@ -52,6 +52,7 @@ public:
     // RC process_snapshot_msg(Message* msg);
     // RC process_snapshot_ack(Message * msg);
     RC process_migration_msg(Message * msg);
+    RC process_abort_msg(Message* msg);
     RC init_phase();
     uint64_t get_next_txn_id();
     bool is_cc_new_timestamp();

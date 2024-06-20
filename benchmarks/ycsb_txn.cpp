@@ -235,7 +235,6 @@ RC YCSBTxnManager::run_ycsb_1(access_t acctype, row_t * row_local) {
     // Release lock after read
     release_last_row_lock(); 
 #endif
-
   } else {
     assert(acctype == WR);
 		int fid = 0;

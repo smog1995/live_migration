@@ -107,6 +107,7 @@ RC InputThread::client_recv_loop() {
 			assert(msg->rtype == CL_RSP || msg->rtype == MIGRATION_ACK);
       if (msg->rtype == MIGRATION_ACK) {
         work_queue.migration_enqueue(msg, false);
+        continue;
       }
       return_node_offset = msg->return_node_id - g_server_start_node;
       assert(return_node_offset < g_servers_per_client);

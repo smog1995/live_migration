@@ -153,7 +153,7 @@ BaseQuery * TPCCQueryGenerator::gen_payment(uint64_t home_partition) {
 	query->txn_type = TPCC_PAYMENT;
   uint64_t home_warehouse;
 	if (FIRST_PART_LOCAL) {
-    while(wh_to_part(home_warehouse = URand(1, g_num_wh)) != home_partition) {}
+    while(GET_NODE_ID(wh_to_part(home_warehouse = URand(1, g_num_wh))) != home_partition) {}
   }
 	else
 		home_warehouse = URand(1, g_num_wh);
@@ -208,7 +208,7 @@ BaseQuery * TPCCQueryGenerator::gen_new_order(uint64_t home_partition) {
 	query->txn_type = TPCC_NEW_ORDER;
   query->items.init(g_max_items_per_txn);
 	if (FIRST_PART_LOCAL) {
-    while(wh_to_part(query->w_id = URand(1, g_num_wh)) != home_partition) {}
+    while(GET_NODE_ID(wh_to_part(query->w_id = URand(1, g_num_wh))) != home_partition) {}
   }
 	else
 		query->w_id = URand(1, g_num_wh);
