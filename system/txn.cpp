@@ -36,8 +36,8 @@
 #include "pps_query.h"
 #include "array.h"
 #include "maat.h"
-
-
+#include "manager.h"
+class Manager;
 void TxnStats::init() {
   starttime=0;
   wait_starttime=get_sys_clock();
@@ -269,6 +269,7 @@ void Transaction::init() {
   end_timestamp = UINT64_MAX;
   txn_id = UINT64_MAX;
   batch_id = UINT64_MAX;
+  waitting_row = NULL;
   DEBUG_M("Transaction::init array insert_rows\n");
   insert_rows.init(g_max_items_per_txn + 10); 
   DEBUG_M("Transaction::reset array accesses\n");
@@ -427,6 +428,7 @@ void TxnManager::reset_query() {
 
 RC TxnManager::commit() {
   DEBUG("Commit %ld\n",get_txn_id());
+  printf("事务%ld尝试提交\n",get_txn_id());
   release_locks(RCOK);
 #if CC_ALG == MAAT
   time_table.release(get_thd_id(),get_txn_id());
@@ -440,6 +442,8 @@ RC TxnManager::commit() {
   logger.enqueueRecord(record);
   return WAIT;
 #endif
+  glob_manager.removeTxn(get_txn_id());
+  printf("事务%ld提交成功\n",get_txn_id());
   return Commit;
 }
 
@@ -447,8 +451,7 @@ RC TxnManager::abort() {
   if(aborted)
     return Abort;
   DEBUG("Abort %ld\n",get_txn_id());
-  // cout << "终止";
-  txn->rc = Abort;
+  cout << "终止";
   INC_STATS(get_thd_id(),total_txn_abort_cnt,1);
   txn_stats.abort_cnt++;
   if(IS_LOCAL(get_txn_id())) {
@@ -460,6 +463,7 @@ RC TxnManager::abort() {
 
   aborted = true;
   release_locks(Abort);
+  glob_manager.removeTxn(get_txn_id()); 
 #if CC_ALG == MAAT
   //assert(time_table.get_state(get_txn_id()) == MAAT_ABORTED);
   time_table.release(get_thd_id(),get_txn_id());
@@ -699,14 +703,29 @@ void TxnManager::release_last_row_lock() {
   //txn->accesses[txn->row_cnt-1]->orig_row = NULL;
 }
 
+// 如果传过来的rc为abort，而且是mvcc的情况下，那么是不会做任何操作的（type改为XP)
 void TxnManager::cleanup_row(RC rc, uint64_t rid) {
     access_t type = txn->accesses[rid]->type;
     if (type == WR && rc == Abort && CC_ALG != MAAT) {
         type = XP;
     }
-
     // Handle calvin elsewhere
-#if CC_ALG != CALVIN
+//  释放锁
+#if CC_ALG == MVCC2PL
+  row_t* orig_r = txn->accesses[rid]->orig_row; 
+
+    // 如果是中止，需要撤回原来的版本；如果是提交，需要触碰写集将行设置为提交（读操作无需触碰)
+    // txn->accesses[rid]->orig_row->manager->rollbackVersion(this);
+  orig_r->return_row(rc, type, this, NULL);
+
+  // 解锁
+  string table_name = orig_r->get_table_name();
+  if (txn->accesses[rid]->type == WR) {
+    glob_manager.lock_manager.unlockRow(this, orig_r->get_primary_key(), table_name);
+  }
+  
+
+#elif CC_ALG != CALVIN
 #if ISOLATION_LEVEL != READ_UNCOMMITTED
     row_t * orig_r = txn->accesses[rid]->orig_row;
     //  mvcc事务回滚不做任何动作？
@@ -743,6 +762,8 @@ void TxnManager::cleanup_row(RC rc, uint64_t rid) {
         }
     }
 #endif
+
+
 #endif
     txn->accesses[rid]->data = NULL;
 
@@ -751,6 +772,7 @@ void TxnManager::cleanup_row(RC rc, uint64_t rid) {
 void TxnManager::cleanup(RC rc) {
 #if CC_ALG == OCC && MODE == NORMAL_MODE
     occ_man.finish(rc,this);
+
 #endif
 
     ts_t starttime = get_sys_clock();
@@ -763,13 +785,12 @@ void TxnManager::cleanup(RC rc) {
 	for (int rid = row_cnt - 1; rid >= 0; rid --) {
 	    cleanup_row(rc,rid);
 	}
-
+  printf("事务%ld解锁完毕\n",this->get_txn_id());
 	if (rc == Abort) {
 	    txn->release_inserts(get_thd_id());
 	    txn->insert_rows.clear();
-
-        INC_STATS(get_thd_id(), abort_time, get_sys_clock() - starttime);
-	} 
+      INC_STATS(get_thd_id(), abort_time, get_sys_clock() - starttime);
+	}
 }
 
 RC TxnManager::get_lock(row_t * row, access_t type) {
@@ -799,20 +820,26 @@ RC TxnManager::get_row(row_t * row, access_t type, row_t *& row_rtn) {
     //uint64_t row_cnt = txn->row_cnt;
     //assert(txn->accesses.get_count() - 1 == row_cnt);
 
-    //  更新事务管理器的状态
+    //  更新事务管理器的状态,作用是阻塞事务重新唤醒时仍知道在处理哪个行，然后调用get_row_post_wait
     this->last_row = row;
     this->last_type = type;
-    //  这个row是从index中找到的在内存的位置，但是并不一定我们要获取的真正位置，因为如果采用mvcc或ts，需要用拷贝或者版本。
+    //  这个row是从index中找到的在内存的位置，但是并不一定我们要获取的真正位置，因为如果采用mvcc或ts，需要用拷贝或者版本,access->data才是
     rc = row->get_row(type, this, access->data);
-
+    if (rc == WAIT) {  //  这个是自己加的，确保不动到之前的设置
+      set_rc(WAIT);  // 还是一样，重新运行(worker_thread的处理rtxn_cnt仍为RCOK
+      // 阻塞时设置等待的行，作用是在死锁检测终止时，同时也将该行终止
+      txn->waitting_row = this->last_row;
+    }
     if (rc == Abort || rc == WAIT) {
         // cout <<" txn_manager_get_row abort";
         row_rtn = NULL;
+        
         DEBUG_M("TxnManager::get_row(abort) access free\n");
-        access_pool.put(get_thd_id(),access);
+        access_pool.put(get_thd_id(),access); // 释放掉，下次重新get_row时再获取
         timespan = get_sys_clock() - starttime;
         INC_STATS(get_thd_id(), txn_manager_time, timespan);
         INC_STATS(get_thd_id(), txn_conflict_cnt, 1);
+
         //cflt = true;
 #if DEBUG_TIMELINE
         printf("CONFLICT %ld %ld\n",get_txn_id(),get_sys_clock());
@@ -846,7 +873,7 @@ RC TxnManager::get_row(row_t * row, access_t type, row_t *& row_rtn) {
 	++txn->row_cnt;
 	if (type == WR)
 		++txn->write_cnt;
-
+  // 如果没有wait或abort才会加到访问数组中
   txn->accesses.add(access);
 
 	timespan = get_sys_clock() - starttime;
@@ -892,7 +919,7 @@ RC TxnManager::get_row_post_wait(row_t *& row_rtn) {
   txn->accesses.add(access);
 	uint64_t timespan = get_sys_clock() - starttime;
 	INC_STATS(get_thd_id(), txn_manager_time, timespan);
-	this->last_row_rtn  = access->data;
+	this->last_row_rtn  = access->data;  // 作用不明
 	row_rtn  = access->data;
   return RCOK;
 }
@@ -992,7 +1019,9 @@ bool TxnManager::calvin_collect_phase_done() {
 
 void TxnManager::release_locks(RC rc) {
 	uint64_t starttime = get_sys_clock();
-
+  if (txn->waitting_row != NULL) {
+    glob_manager.lock_manager.unlockRow(this, txn->waitting_row->get_primary_key(),txn->waitting_row->get_table_name());
+  }
   cleanup(rc);
 
 	uint64_t timespan = (get_sys_clock() - starttime);

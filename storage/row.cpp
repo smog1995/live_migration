@@ -24,6 +24,7 @@
 #include "row_mvcc.h"
 #include "row_occ.h"
 #include "row_maat.h"
+#include "row_mvcc2pl.h"
 #include "mem_alloc.h"
 #include "manager.h"
 
@@ -66,6 +67,8 @@ void row_t::init_manager(row_t * row) {
     manager = (Row_occ *) mem_allocator.align_alloc(sizeof(Row_occ));
 #elif CC_ALG == MAAT 
     manager = (Row_maat *) mem_allocator.align_alloc(sizeof(Row_maat));
+#elif CC_ALG == MVCC2PL
+	manager = (MVCCRow *) mem_allocator.align_alloc(sizeof(MVCCRow));
 #endif
 
 #if CC_ALG != HSTORE && CC_ALG != HSTORE_SPEC 
@@ -73,7 +76,8 @@ void row_t::init_manager(row_t * row) {
 #endif
 }
 
-table_t * row_t::get_table() { 
+table_t * row_t::get_table() {
+
 	return table; 
 }
 
@@ -134,7 +138,7 @@ GET_VALUE(SInt32);
 
 char * row_t::get_value(int id) {
   int pos __attribute__ ((unused));
-	pos = get_schema()->get_field_index(id);
+ 	pos = get_schema()->get_field_index(id);
   DEBUG("get_value pos %d -- %lx\n",pos,(uint64_t)this);
 #if SIM_FULL_ROW
 	return &data[pos];
@@ -157,8 +161,8 @@ char * row_t::get_data() {
   return data; 
 }
 
-void row_t::set_data(char * data) { 
-	int tuple_size = get_schema()->get_tuple_size();
+void row_t::set_data(char * data) {
+	// int tuple_size = get_schema()->get_tuple_size(); // 原代码注释，直接用类成员tuple_size即可
 	// cout <<_primary_key << " ";
 	// cout << "set_data:" << tuple_size << "   ";
 #if SIM_FULL_ROW
@@ -170,6 +174,7 @@ void row_t::set_data(char * data) {
 }
 // copy from the src to this
 void row_t::copy(row_t * src) {
+	// cout << src->get_table_name() << " this:" << this->get_table_name() << endl; 
 	assert(src->get_schema() == this->get_schema());
 #if SIM_FULL_ROW
 	set_data(src->get_data());
@@ -181,7 +186,7 @@ void row_t::copy(row_t * src) {
 
 void row_t::free_row() {
   DEBUG_M("row_t::free_row free\n");
-#if SIM_FULL
+#if SIM_FULL_ROW
 	mem_allocator.free(data, sizeof(char) * get_tuple_size());
 #else
 	mem_allocator.free(data, sizeof(uint64_t) * 1);
@@ -265,7 +270,6 @@ RC row_t::get_row(access_t type, TxnManager * txn, row_t *& row) {
 		} else if (rc == WAIT) {
 		      rc = WAIT;
 		      goto end;
-
 		} else if (rc == Abort) {
 		}
         if (rc != Abort) {
@@ -305,6 +309,12 @@ RC row_t::get_row(access_t type, TxnManager * txn, row_t *& row) {
 #endif
 	row = this;
 	goto end;
+#elif CC_ALG == MVCC2PL
+	rc = this->manager->access(type, txn, row); // 为写锁时加锁，加锁失败则返回
+	if (rc == WAIT) {
+		goto end;
+	}
+
 #else
 	assert(false);
 #endif
@@ -313,11 +323,12 @@ end:
   return rc;
 }
 
-// Return call for get_row if waiting 
+// Return call for get_row if waiting  
+// 
 RC row_t::get_row_post_wait(access_t type, TxnManager * txn, row_t *& row) {
 
   RC rc = RCOK;
-  assert(CC_ALG == WAIT_DIE || CC_ALG == MVCC || CC_ALG == TIMESTAMP);
+  assert(CC_ALG == WAIT_DIE || CC_ALG == MVCC || CC_ALG == TIMESTAMP || CC_ALG == MVCC2PL);
 #if CC_ALG == WAIT_DIE
   assert(txn->lock_ready);
 	rc = RCOK;
@@ -328,7 +339,6 @@ RC row_t::get_row_post_wait(access_t type, TxnManager * txn, row_t *& row) {
 			assert(txn->ts_ready);
 			//INC_STATS(thd_id, time_wait, t2 - t1);
 			row = txn->cur_row;
-
 			assert(row->get_data() != NULL);
 			assert(row->get_table() != NULL);
 			assert(row->get_schema() == this->get_schema());
@@ -340,6 +350,11 @@ RC row_t::get_row_post_wait(access_t type, TxnManager * txn, row_t *& row) {
 		newr->copy(row);
 		row = newr;
 	}
+#elif CC_ALG == MVCC2PL
+	rc = manager->access(type, txn, row); // 写版本会初始化该行的所有信息
+	assert(rc == RCOK); //  我们的设计中，只会唤醒不冲突,能加锁成功的事务
+
+	
 #endif
   return rc;
 }
@@ -392,6 +407,15 @@ void row_t::return_row(RC rc, access_t type, TxnManager * txn, row_t * row) {
 		RC rc = this->manager->access(txn, W_REQ, row);
 		assert(rc == RCOK);
 	}
+
+#elif CC_ALG == MVCC2PL
+//  XP代表的应该为中止
+	if (type == XP) {
+		this->manager->rollbackVersion(txn);
+	} else if(type == WR) {
+		this->manager->touchWriteVersion(txn);
+	}
+
 #elif CC_ALG == OCC
 	assert (row != NULL);
 	if (type == WR)
@@ -418,6 +442,7 @@ void row_t::return_row(RC rc, access_t type, TxnManager * txn, row_t * row) {
 		this->copy(row);
 	}
 	return;
+
 #else 
 	assert(false);
 #endif

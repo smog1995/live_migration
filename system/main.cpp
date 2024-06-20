@@ -24,6 +24,7 @@
 #include "abort_thread.h"
 #include "io_thread.h"
 #include "log_thread.h"
+#include "deadlock_detect_thread.h"
 #include "manager.h"
 #include "math.h"
 #include "query.h"
@@ -49,6 +50,7 @@ InputThread * input_thds;
 OutputThread * output_thds;
 AbortThread * abort_thds;
 LogThread * log_thds;
+DeadLockDetectThread * ld_thd;
 #if CC_ALG == CALVIN
 CalvinLockThread * calvin_lock_thds;
 CalvinSequencerThread * calvin_seq_thds;
@@ -197,7 +199,8 @@ int main(int argc, char* argv[])
 	uint64_t wthd_cnt = thd_cnt;
 	uint64_t rthd_cnt = g_rem_thread_cnt;
 	uint64_t sthd_cnt = g_send_thread_cnt;
-    uint64_t all_thd_cnt = thd_cnt + rthd_cnt + sthd_cnt + g_abort_thread_cnt;
+  uint64_t lthd_cnt = g_ld_thread_cnt;
+    uint64_t all_thd_cnt = thd_cnt + rthd_cnt + sthd_cnt + g_abort_thread_cnt + lthd_cnt;
 #if LOGGING
     all_thd_cnt += 1; // logger thread
 #endif
@@ -216,9 +219,12 @@ int main(int argc, char* argv[])
     output_thds = new OutputThread[sthd_cnt];
     abort_thds = new AbortThread[1];
     log_thds = new LogThread[1];
+   
 #if CC_ALG == CALVIN
     calvin_lock_thds = new CalvinLockThread[1];
     calvin_seq_thds = new CalvinSequencerThread[1];
+#elif CC_ALG == MVCC2PL
+    ld_thd = new DeadLockDetectThread;
 #endif
 	// query_queue should be the last one to be initialized!!!
 	// because it collects txn latency
@@ -282,7 +288,11 @@ int main(int argc, char* argv[])
     log_thds[0].init(id,g_node_id,m_wl);
     pthread_create(&p_thds[id++], NULL, run_thread, (void *)&log_thds[0]);
 #endif
-
+#if CC_ALG == MVCC2PL
+//  添加死锁检测线程
+    ld_thd->init(id, g_node_id, m_wl);
+    pthread_create(&p_thds[id++], NULL, run_thread, (void *)ld_thd);
+#endif
 #if CC_ALG != CALVIN
   abort_thds[0].init(id,g_node_id,m_wl);
   pthread_create(&p_thds[id++], NULL, run_thread, (void *)&abort_thds[0]);
@@ -311,7 +321,8 @@ int main(int argc, char* argv[])
 
 	for (uint64_t i = 0; i < all_thd_cnt ; i++) 
     pthread_join(p_thds[i], NULL);
-	endtime = get_server_clock();
+  
+  endtime = get_server_clock();
 	
   fflush(stdout);
   printf("PASS! SimTime = %f\n", (float)(endtime - starttime) / BILLION);

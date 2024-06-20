@@ -54,6 +54,7 @@ public:
     void release(uint64_t thd_id);
     //vector<Access*> accesses;
     Array<Access*> accesses;
+    row_t* waitting_row;
     uint64_t timestamp;
       // For OCC
     uint64_t start_timestamp;
@@ -165,6 +166,7 @@ public:
     bool recon;
 
     row_t * volatile cur_row;
+    row_t * last_row;
     // [DL_DETECT, NO_WAIT, WAIT_DIE]
     int volatile   lock_ready;
     // [TIMESTAMP, MVCC]
@@ -251,7 +253,7 @@ protected:
     RC get_row_post_wait(row_t *& row_rtn);
 
     // For Waiting
-    row_t * last_row;
+    // row_t * last_row;
     row_t * last_row_rtn;
     access_t last_type;
 

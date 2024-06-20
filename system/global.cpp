@@ -106,6 +106,7 @@ UInt32 g_thread_cnt = THREAD_CNT;
 #endif
 UInt32 g_rem_thread_cnt = REM_THREAD_CNT;
 UInt32 g_abort_thread_cnt = 1;
+UInt32 g_ld_thread_cnt = 1;
 #if LOGGING
 UInt32 g_logger_thread_cnt = 1;
 #else
@@ -116,7 +117,7 @@ UInt32 g_send_thread_cnt = SEND_THREAD_CNT;
 // sequencer + scheduler thread
 UInt32 g_total_thread_cnt = g_thread_cnt + g_rem_thread_cnt + g_send_thread_cnt + g_abort_thread_cnt + g_logger_thread_cnt + 2;
 #else
-UInt32 g_total_thread_cnt = g_thread_cnt + g_rem_thread_cnt + g_send_thread_cnt + g_abort_thread_cnt + g_logger_thread_cnt;
+UInt32 g_total_thread_cnt = g_thread_cnt + g_rem_thread_cnt + g_send_thread_cnt + g_abort_thread_cnt + g_logger_thread_cnt + g_ld_thread_cnt;
 #endif
 UInt32 g_total_client_thread_cnt = g_client_thread_cnt + g_client_rem_thread_cnt + g_client_send_thread_cnt + g_client_migration_thread_cnt;
 UInt32 g_total_node_cnt = g_node_cnt + g_client_node_cnt + g_repl_cnt*g_node_cnt;

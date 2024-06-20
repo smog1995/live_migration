@@ -155,6 +155,7 @@ extern UInt32 g_abort_thread_cnt;
 extern UInt32 g_logger_thread_cnt;
 extern UInt32 g_send_thread_cnt;
 extern UInt32 g_rem_thread_cnt;
+extern UInt32 g_ld_thread_cnt;
 extern ts_t g_abort_penalty; 
 extern ts_t g_abort_penalty_max; 
 extern bool g_central_man;
@@ -238,6 +239,7 @@ extern UInt32 g_repl_type;
 extern UInt32 g_repl_cnt;
 
 enum RC { RCOK=0, Commit, Abort, WAIT, WAIT_REM, ERROR, FINISH, NONE };
+enum migration_stage { SNAPSHOT_TRANS = 0, ASYNC_LOGS, SYNC_EXEC};
 enum RemReqType {INIT_DONE=0,
     RLK,
     RULK,
@@ -268,7 +270,8 @@ enum RemReqType {INIT_DONE=0,
     SNAPSHOT_MSG,
     SNAPSHOT_ACK,
     MIGRATION_MSG,
-    MIGRATION_ACK
+    MIGRATION_ACK,
+    RTXN_ABORT
     };
 
 // Calvin
