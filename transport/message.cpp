@@ -26,6 +26,8 @@
 #include "message.h"
 #include "maat.h"
 
+
+// socket处理其他服务器发来的信息，解析为消息组返回
 std::vector<Message*> * Message::create_messages(char * buf) {
   std::vector<Message*> * all_msgs = new std::vector<Message*>;
   char * data = buf;
@@ -58,9 +60,12 @@ Message * Message::create_message(char * buf) {
  return msg;
 }
 
+
 Message * Message::create_message(TxnManager * txn, RemReqType rtype) {
  Message * msg = create_message(rtype);
- msg->mcopy_from_txn(txn);
+//  赋值tid
+//  msg->mcopy_from_txn(txn);
+ 
  msg->copy_from_txn(txn);
 
  // copy latency here
@@ -149,6 +154,7 @@ Message * Message::create_message(RemReqType rtype) {
     case CL_QRY:
     case RTXN:
     case RTXN_CONT:
+    
 #if WORKLOAD == YCSB
       msg = new YCSBClientQueryMessage;
 #elif WORKLOAD == TPCC 
@@ -169,6 +175,21 @@ Message * Message::create_message(RemReqType rtype) {
       break;
     case CL_RSP:
       msg = new ClientResponseMessage;
+      break;
+    case SNAPSHOT_MSG:
+      msg = new SnapshotMessage;
+      break;
+    case SNAPSHOT_ACK:
+      msg = new SnapshotAckMessage;
+      break;
+    case MIGRATION_MSG:
+      msg = new LiveMigrationMessage;
+      break;
+    case MIGRATION_ACK:
+      msg = new LiveMigrationAckMessage;
+      break;
+    case RTXN_ABORT:    //  myt add，作用是通知系统终止该事务
+      msg = new TxnAbortMessage;
       break;
     default: assert(false);
   }
@@ -366,6 +387,36 @@ void Message::release_message(Message * msg) {
       delete m_msg;
       break;
                  }
+    case SNAPSHOT_MSG: {
+      SnapshotMessage * m_msg = (SnapshotMessage*)msg;
+      m_msg->release();
+      delete m_msg;
+      break;
+    }
+    case SNAPSHOT_ACK: {
+      SnapshotAckMessage * m_msg = (SnapshotAckMessage*)msg;
+      m_msg->release();
+      delete m_msg;
+      break;
+    }
+    case MIGRATION_MSG: {
+      LiveMigrationMessage * m_msg = (LiveMigrationMessage*)msg;
+      m_msg->release();
+      delete m_msg;
+      break;
+    }
+    case MIGRATION_ACK: {
+      LiveMigrationAckMessage * m_msg = (LiveMigrationAckMessage*)msg;
+      m_msg->release();
+      delete m_msg;
+      break;
+    }
+    case RTXN_ABORT: {
+      TxnAbortMessage * m_msg = (TxnAbortMessage*)msg;
+      m_msg->release();
+      delete m_msg;
+      break;
+    }
     default: { assert(false); }
   }
 }
@@ -373,12 +424,13 @@ void Message::release_message(Message * msg) {
 
 uint64_t QueryMessage::get_size() {
   uint64_t size = Message::mget_size();
-#if CC_ALG == WAIT_DIE || CC_ALG == TIMESTAMP || CC_ALG == MVCC
+#if CC_ALG == WAIT_DIE || CC_ALG == TIMESTAMP || CC_ALG == MVCC 
   size += sizeof(ts);
 #endif
 #if CC_ALG == OCC 
   size += sizeof(start_ts);
-#endif  
+#endif
+  size += sizeof(imitate_txn);
   return size;
 }
 
@@ -415,7 +467,10 @@ void QueryMessage::copy_from_buf(char * buf) {
 #endif
 #if CC_ALG == OCC 
  COPY_VAL(start_ts,buf,ptr);
+ 
 #endif
+  COPY_VAL(imitate_txn,buf,ptr);
+  assert( ptr == QueryMessage::get_size());
 }
 
 void QueryMessage::copy_to_buf(char * buf) {
@@ -428,7 +483,10 @@ void QueryMessage::copy_to_buf(char * buf) {
 #endif
 #if CC_ALG == OCC 
  COPY_BUF(buf,start_ts,ptr);
+ 
 #endif
+  COPY_BUF(buf,imitate_txn,ptr);
+  assert(ptr == QueryMessage::get_size());
 }
 
 /************************/
@@ -614,7 +672,6 @@ void TPCCClientQueryMessage::copy_to_txn(TxnManager * txn) {
   tpcc_query->remote = remote;
   tpcc_query->ol_cnt = ol_cnt;
   tpcc_query->o_entry_d = o_entry_d;
-
 }
 
 void TPCCClientQueryMessage::copy_from_buf(char * buf) {
@@ -1169,9 +1226,6 @@ void QueryResponseMessage::copy_to_buf(char * buf) {
  assert(ptr == get_size());
 }
 
-/************************/
-
-
 
 uint64_t FinishMessage::get_size() {
   uint64_t size = Message::mget_size();
@@ -1481,6 +1535,12 @@ void TPCCQueryMessage::copy_to_txn(TxnManager * txn) {
 
   // new order
   if(txn_type == TPCC_NEW_ORDER) {
+    printf("neworder复制item\n");
+    if (imitate_txn) {
+      // tpcc_query->items.clear();
+      tpcc_query->items.release();
+      tpcc_query->items.init(g_max_items_per_txn * 2);
+    }
     tpcc_query->items.append(items);
     tpcc_query->rbk = rbk;
     tpcc_query->remote = remote;
@@ -1521,6 +1581,7 @@ void TPCCQueryMessage::copy_from_buf(char * buf) {
     items.init(size);
     for(uint64_t i = 0 ; i < size;i++) {
       DEBUG_M("TPCCQueryMessage::copy item alloc\n");
+      
       Item_no * item = (Item_no*)mem_allocator.alloc(sizeof(Item_no));
       COPY_VAL(*item,buf,ptr);
       items.add(item);
@@ -1766,3 +1827,118 @@ void PPSQueryMessage::copy_to_buf(char * buf) {
 
 }
 
+
+
+/************************/
+// class SnapshotMessage : public Message {
+// public:
+  // int part_id;
+  // uint8_t table_name_size;
+  // uint32_t tuple_size;
+  // char* table_name;
+  // char* snapshot_buffer;
+  // // vector<row_t*> rows;
+  // bool is_finish;
+//   void init() {}
+//   void copy_from_buf(char * buf);
+//   void copy_to_buf(char * buf);
+//   void release() {}
+// }
+
+//  COPY_VAL(rtype,buf,ptr);
+//   COPY_VAL(txn_id,buf,ptr);
+// #if CC_ALG == CALVIN
+//   COPY_VAL(batch_id,buf,ptr);
+// #endif
+//   COPY_VAL(mq_time,buf,ptr);
+
+//   COPY_VAL(lat_work_queue_time,buf,ptr);
+//   COPY_VAL(lat_msg_queue_time,buf,ptr);
+//   COPY_VAL(lat_cc_block_time,buf,ptr);
+//   COPY_VAL(lat_cc_time,buf,ptr);
+//   COPY_VAL(lat_process_time,buf,ptr);
+//   COPY_VAL(lat_network_time,buf,ptr);
+//   COPY_VAL(lat_other_time,buf,ptr);
+void SnapshotMessage::copy_from_buf(char *buf) {
+  // cout << "snapshotmesg";
+  mcopy_from_buf(buf);
+  uint64_t ptr = Message::mget_size();
+  COPY_VAL(finish, buf, ptr);
+  COPY_VAL(part_id, buf, ptr);
+  // COPY_VAL(table_name_size, buf, ptr);
+  // COPY_VAL(buffer_size, buf, ptr);
+  // cout << buffer_size<< " ";
+  COPY_VAL(tuple_count, buf, ptr);
+  //  table_name = (char*)mem_allocator.alloc(table_name_size);
+  COPY_VAL_SIZE(table_index_name, buf, ptr, TABLE_NAME_SIZE);
+  //  snapshot_buffer = (char*) mem_allocator.alloc(buffer_size);
+  COPY_VAL_SIZE(snapshot_buffer, buf, ptr, MIGRATION_BUFFER_SIZE);
+  // for (size_t i = 0; i < buffer_size; i++) {
+  //   cout << snapshot_buffer[i];
+  // }
+  // cout << strlen(snapshot_buffer) << snapshot_buffer << endl;
+  assert(ptr == get_size());
+
+}
+
+void SnapshotMessage::copy_to_buf(char * buf) {
+  mcopy_to_buf(buf);
+  // cout << "snapshotMessage" << endl;
+  uint64_t ptr = Message::mget_size();
+  COPY_BUF(buf, finish, ptr);
+  COPY_BUF(buf, part_id, ptr);
+  // COPY_BUF(buf, table_name_size, ptr);
+  // COPY_BUF(buf, buffer_size, ptr);
+  COPY_BUF(buf, tuple_count, ptr);
+  COPY_BUF_SIZE(buf, table_index_name, ptr, TABLE_NAME_SIZE);
+  COPY_BUF_SIZE(buf, snapshot_buffer, ptr, MIGRATION_BUFFER_SIZE);
+  // cout << ptr << "buffer_size" << ptr;
+  // for (size_t i = 0; i < MIGRATION_BUFFER_SIZE; i++) {
+  //   cout << snapshot_buffer[i];
+  // }
+  // cout << endl;
+  assert(get_size() == ptr);
+}
+
+
+void SnapshotMessage::release() {
+}
+
+  // uint8_t live_migration_state;
+  // int dest_id;
+  // int part_id;
+  // int table_name_size;
+  // char* table_name;
+void LiveMigrationMessage::copy_from_buf(char * buf) {
+  cout << "copy_from_buf of LiveMi_msg" << endl;
+  mcopy_from_buf(buf);
+  uint64_t ptr = Message::mget_size();
+  COPY_VAL(finish, buf, ptr);
+  COPY_VAL(live_migration_stage, buf, ptr);
+  COPY_VAL(migration_dest_id, buf, ptr);
+  COPY_VAL(part_id, buf, ptr);
+  // COPY_VAL(table_name_size, buf, ptr);
+  // table_name = new char[table_name_size];
+  // table_name = (char*)mem_allocator.alloc(table_name_size);
+  COPY_VAL_SIZE(table_index_name, buf, ptr, TABLE_NAME_SIZE);
+  // memcpy(table_name, buf + ptr, table_name_size);
+  cout << table_index_name << "封装的消息包";
+  cout << finish << live_migration_stage << migration_dest_id << part_id << endl;
+  // ptr += table_name_size;
+  assert(ptr == get_size());
+}
+void LiveMigrationMessage::copy_to_buf(char* buf) {
+  mcopy_to_buf(buf);
+  uint64_t ptr = Message::mget_size();
+  COPY_BUF(buf, finish, ptr);
+  COPY_BUF(buf, live_migration_stage, ptr);
+  COPY_BUF(buf, migration_dest_id, ptr);
+  COPY_BUF(buf, part_id, ptr);
+  // COPY_BUF(buf, table_name_size, ptr);
+  COPY_BUF_SIZE(buf, *table_index_name, ptr, TABLE_NAME_SIZE);
+  assert(ptr == get_size());
+}
+void LiveMigrationMessage::release() {
+    cout << "release" << endl;
+    // mem_allocator.free(table_name, table_name_size);
+  }

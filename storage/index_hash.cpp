@@ -144,7 +144,6 @@ RC IndexHash::index_read(idx_key_t key, itemid_t * &item,
 	// 1. get the sh latch
 //	get_latch(cur_bkt);
 
-	
 	cur_bkt->read_item(key, item);
 	
 	// 3. release the latch

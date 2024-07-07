@@ -54,6 +54,7 @@ public:
     void release(uint64_t thd_id);
     //vector<Access*> accesses;
     Array<Access*> accesses;
+    row_t* waitting_row;
     uint64_t timestamp;
       // For OCC
     uint64_t start_timestamp;
@@ -165,6 +166,7 @@ public:
     bool recon;
 
     row_t * volatile cur_row;
+    row_t * last_row;
     // [DL_DETECT, NO_WAIT, WAIT_DIE]
     int volatile   lock_ready;
     // [TIMESTAMP, MVCC]
@@ -210,6 +212,7 @@ public:
 //	void 			gen_log_entry(int &length, void * log);
     bool log_flushed;
     bool repl_finished;
+
     Transaction * txn;
     BaseQuery * query;
     uint64_t client_startts;
@@ -223,8 +226,9 @@ public:
     //void send_rfin_messages(RC rc) {assert(false);}
     void send_finish_messages();
     void send_prepare_messages();
-
+    void send_sync_twopc_transaction();
     TxnStats txn_stats;
+
 
     bool set_ready() {return ATOM_CAS(txn_ready,0,1);}
     bool unset_ready() {return ATOM_CAS(txn_ready,1,0);}
@@ -238,7 +242,20 @@ public:
     Array<row_t*> calvin_locked_rows;
     bool calvin_exec_phase_done();
     bool calvin_collect_phase_done();
-
+    void runSyncExec();
+    bool isImitateTxn() {return imitate_txn;}
+    bool isSyncExec() {return sync_exec;}
+    bool isRemoteTxn()  {return remote_txn;}
+    void set_sync_abort() {
+        sync_exec_rtn_abort = true;
+    }
+    void setRemoteTxn() {
+        remote_txn = true;
+    }
+    void setImitateTxn() {
+        imitate_txn = true;
+    }
+    bool committed;
 protected:	
 
     int rsp_cnt;
@@ -251,11 +268,19 @@ protected:
     RC get_row_post_wait(row_t *& row_rtn);
 
     // For Waiting
-    row_t * last_row;
+    // row_t * last_row;
     row_t * last_row_rtn;
     access_t last_type;
-
     sem_t rsp_mutex;
+    bool remote_txn = false;
+    //  是否被发送往目标同步执行
+    bool   sync_exec = false;
+    //  是否是目标上执行的模仿事务
+    bool   imitate_txn = false;
+    //  目标模仿是否返回终止
+    bool sync_exec_rtn_abort = false;
+
+    
 };
 
 #endif

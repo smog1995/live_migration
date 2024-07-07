@@ -182,7 +182,7 @@ void Sequencer::process_ack(Message * msg, uint64_t thd_id) {
 
 // Assumes 1 thread does sequencer work
 void Sequencer::process_txn( Message * msg,uint64_t thd_id, uint64_t early_start, uint64_t last_start, uint64_t wait_time, uint32_t abort_cnt) {
-
+  // cout << "使用sequencer" << endl;
     uint64_t starttime = get_sys_clock();
     DEBUG("SEQ Processing msg\n");
     qlite_ll * en = wl_tail;

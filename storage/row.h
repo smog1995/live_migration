@@ -53,7 +53,7 @@ class Row_ts;
 class Row_occ;
 class Row_maat;
 class Row_specex;
-
+class MVCCRow;
 class row_t
 {
 public:
@@ -72,7 +72,7 @@ public:
 
 	void copy(row_t * src);
 
-	void 		set_primary_key(uint64_t key) { _primary_key = key; };
+	void 		set_primary_key(uint64_t key) { _primary_key = key;};
 	uint64_t 	get_primary_key() {return _primary_key; };
 	uint64_t 	get_part_id() { return _part_id; };
 
@@ -120,6 +120,8 @@ public:
   	Row_specex * manager;
   #elif CC_ALG == AVOID
     Row_avoid * manager;
+  #elif CC_ALG == MVCC2PL
+	MVCCRow * manager;
   #endif
 	char * data;
   int tuple_size;

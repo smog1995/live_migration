@@ -11,11 +11,12 @@
 #define SEND_THREAD_CNT THREAD_CNT
 #define CORE_CNT 8
 // PART_CNT should be at least NODE_CNT
-#define PART_CNT NODE_CNT*2
+#define PART_CNT NODE_CNT*6
 #define CLIENT_NODE_CNT 1
 #define CLIENT_THREAD_CNT 4
 #define CLIENT_REM_THREAD_CNT 2
 #define CLIENT_SEND_THREAD_CNT 2
+#define CLIENT_MIGRATION_THREAD_CNT 1
 #define CLIENT_RUNTIME false
 
 #define LOAD_METHOD LOAD_MAX
@@ -29,6 +30,9 @@
 // each transaction only accesses only 1 virtual partition. But the lock/ts manager and index are not aware of such partitioning. VIRTUAL_PART_CNT describes the request distribution and is only used to generate queries. For HSTORE, VIRTUAL_PART_CNT should be the same as PART_CNT.
 #define VIRTUAL_PART_CNT    PART_CNT  
 #define PAGE_SIZE         4096 
+#define TABLE_NAME_SIZE 20
+#define MIGRATION_BUFFER_SIZE 2048
+
 #define CL_SIZE           64
 #define CPU_FREQ          2.6
 // enable hardware migration.
@@ -73,10 +77,10 @@
 // Message Passing
 /***********************************************/
 #define TPORT_TYPE TCP
-#define TPORT_PORT 17000
+#define TPORT_PORT 18000
 #define SET_AFFINITY true
 #define TPORT_TYPE TCP
-#define TPORT_PORT 17000
+#define TPORT_PORT 18000
 #define SET_AFFINITY true
 
 #define MAX_TPORT_NAME 128
@@ -98,7 +102,8 @@
 // Concurrency Control
 /***********************************************/
 // WAIT_DIE, NO_WAIT, TIMESTAMP, MVCC, CALVIN, MAAT
-#define CC_ALG NO_WAIT
+#define CC_ALG MVCC2PL
+#define MIGRATION MY_MIGRATION
 #define ISOLATION_LEVEL SERIALIZABLE
 #define YCSB_ABORT_MODE false
 
@@ -116,7 +121,7 @@
 #define ENABLE_LATCH        false
 #define CENTRAL_INDEX       false
 #define CENTRAL_MANAGER       false
-#define INDEX_STRUCT        IDX_HASH
+#define INDEX_STRUCT        IDX_MIGRATION_HASH
 #define BTREE_ORDER         16
 
 // [TIMESTAMP]
@@ -186,7 +191,7 @@
 #define CUST_PER_DIST_SMALL 2000
 #define MAX_ITEMS_NORM 100000
 #define CUST_PER_DIST_NORM 3000
-#define MAX_ITEMS_PER_TXN 15
+#define MAX_ITEMS_PER_TXN 20
 // Some of the transactions read the data but never use them. 
 // If TPCC_ACCESS_ALL == fales, then these parts of the transactions
 // are not modeled.
@@ -287,6 +292,7 @@ enum PPSTxnType {PPS_ALL = 0,
 // INDEX_STRUCT
 #define IDX_HASH          1
 #define IDX_BTREE         2
+#define IDX_MIGRATION_HASH 3
 // WORKLOAD
 #define YCSB            1
 #define TPCC            2
@@ -305,6 +311,7 @@ enum PPSTxnType {PPS_ALL = 0,
 #define CALVIN      10
 #define MAAT      11
 #define WDL           12
+#define MVCC2PL       13
 // TIMESTAMP allocation method.
 #define TS_MUTEX          1
 #define TS_CAS            2
@@ -338,6 +345,11 @@ enum PPSTxnType {PPS_ALL = 0,
 #define READ_COMMITTED 2 
 #define READ_UNCOMMITTED 3 
 #define NOLOCK 4 
+
+// migration_choose
+#define MY_MIGRATION 1
+#define REMUS_MIGRATION 2
+
 
 // Stats and timeout
 #define BILLION 1000000000UL // in ns => 1 second

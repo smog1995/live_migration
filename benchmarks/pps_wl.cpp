@@ -21,6 +21,7 @@
 #include "thread.h"
 #include "table.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "pps_helper.h"
 #include "row.h"
@@ -197,6 +198,7 @@ void PPSWorkload::init_tab_products() {
     DEBUG("PRODUCTS added (%d, ...)\n",id);
 
   }
+  // delete[] padding;
 }
 
 void PPSWorkload::init_tab_supplies() {

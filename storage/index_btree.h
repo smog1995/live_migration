@@ -48,8 +48,11 @@ public:
 	RC 			index_insert(idx_key_t key, itemid_t * item, int part_id = -1);
 	RC 			index_insert_nonunique(idx_key_t key, itemid_t * item, int part_id = -1) { return RCOK;}
 	RC	 		index_read(idx_key_t key, itemid_t * &item, 
-					uint64_t thd_id, int64_t part_id = -1);
+					int part_id = -1, int thd_id = 0);
 	RC	 		index_read(idx_key_t key, itemid_t * &item, int part_id = -1);
+
+	//   这里是适配pps测试中hash_index引入的index_read，实际不会使用
+	RC			index_read(idx_key_t key, int count, itemid_t *& item, int part_id=-1);
 	RC	 		index_read(idx_key_t key, itemid_t * &item);
 	RC 			index_next(uint64_t thd_id, itemid_t * &item, bool samekey = false);
 

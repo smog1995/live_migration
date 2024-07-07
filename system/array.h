@@ -123,7 +123,20 @@ public:
     items[i] = items[j];
     items[j] = tmp;
   }
-  T operator[](uint64_t idx) {assert(idx < count); return items[idx];}
+  T operator[](uint64_t idx) {
+    // assert(idx < count); 
+    try
+    {
+      if (idx >= count) {
+        throw "越界";
+      }
+    }
+    catch(const std::exception& e)
+    {
+      std::cerr << e.what() << '\n' <<"count为" << count;
+    }
+    
+    return items[idx];}
   uint64_t get_count() {return count;}
   uint64_t size() {return count;}
   bool is_full() { return count == capacity;}

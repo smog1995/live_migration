@@ -26,6 +26,8 @@
 #include "client_txn.h"
 #include "msg_queue.h"
 #include "work_queue.h"
+#include "migration_thread.h"
+// #include "migration_manager.h"
 //#include <jemallloc.h>
 
 void * f(void *);
@@ -40,7 +42,7 @@ void * run_thread(void *);
 ClientThread * client_thds;
 InputThread * input_thds;
 OutputThread * output_thds;
-
+MigrationThread * migration_thd;
 // defined in parser.cpp
 void parser(int argc, char * argv[]);
 
@@ -110,7 +112,9 @@ int main(int argc, char* argv[])
   work_queue.init();
   printf("Done\n");
   printf("Initializing msg pool... ");
+  // migration_manager.init((TPCCWorkload*)m_wl);
   fflush(stdout);
+  
   msg_pool.init(m_wl,g_inflight_max);
   printf("Done\n");
   fflush(stdout);
@@ -120,7 +124,8 @@ int main(int argc, char* argv[])
 	uint64_t cthd_cnt = thd_cnt; 
 	uint64_t rthd_cnt = g_client_rem_thread_cnt;
 	uint64_t sthd_cnt = g_client_send_thread_cnt;
-  uint64_t all_thd_cnt = thd_cnt + rthd_cnt + sthd_cnt;
+	uint64_t mthd_cnt = g_client_migration_thread_cnt; // 迁移线程
+  uint64_t all_thd_cnt = thd_cnt + rthd_cnt + sthd_cnt + mthd_cnt;
   assert(all_thd_cnt == g_this_total_thread_cnt);
 
 	pthread_t * p_thds = 
@@ -131,6 +136,7 @@ int main(int argc, char* argv[])
   client_thds = new ClientThread[cthd_cnt];
   input_thds = new InputThread[rthd_cnt];
   output_thds = new OutputThread[sthd_cnt];
+  migration_thd = new MigrationThread;
 	//// query_queue should be the last one to be initialized!!!
 	// because it collects txn latency
   printf("Initializing message queue... ");
@@ -183,9 +189,9 @@ int main(int argc, char* argv[])
     output_thds[i].init(id,g_node_id,m_wl);
 		pthread_create(&p_thds[id++], NULL, run_thread, (void *)&output_thds[i]);
   }
+	pthread_create(&p_thds[id++], NULL, run_thread, (void *)migration_thd);
 	for (uint64_t i = 0; i < all_thd_cnt; i++) 
 		pthread_join(p_thds[i], NULL);
-
 	endtime = get_server_clock();
 	
   fflush(stdout);
@@ -202,36 +208,3 @@ void * run_thread(void * id) {
 	return NULL;
 }
 
-void network_test() {
-  /*
-
-	ts_t start;
-	ts_t end;
-	double time;
-	int bytes;
-	for(int i=4; i < 257; i+=4) {
-		time = 0;
-		for(int j=0;j < 1000; j++) {
-			start = get_sys_clock();
-			tport_man.simple_send_msg(i);
-			while((bytes = tport_man.simple_recv_msg()) == 0) {}
-			end = get_sys_clock();
-			assert(bytes == i);
-			time += end-start;
-		}
-		time = time/1000;
-		printf("Network Bytes: %d, s: %f\n",i,time/BILLION);
-        fflush(stdout);
-	}
-  */
-}
-
-void network_test_recv() {
-  /*
-	int bytes;
-	while(1) {
-		if( (bytes = tport_man.simple_recv_msg()) > 0)
-			tport_man.simple_send_msg(bytes);
-	}
-  */
-}

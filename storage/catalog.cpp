@@ -21,6 +21,7 @@
 void 
 Catalog::init(const char * table_name, uint32_t table_id, int field_cnt) {
 	this->table_name = table_name;
+	cout << "schema init " << strlen(this->table_name);
 	this->table_id = table_id;
 	this->field_cnt = 0;
 	this->_columns = new Column [field_cnt];

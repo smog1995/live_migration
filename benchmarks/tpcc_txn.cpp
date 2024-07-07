@@ -23,12 +23,14 @@
 #include "table.h"
 #include "row.h"
 #include "index_hash.h"
+#include "migration_index_hash.h"
 #include "index_btree.h"
 #include "tpcc_const.h"
 #include "transport.h"
 #include "msg_queue.h"
 #include "message.h"
-
+#include "manager.h"
+class Manager;
 void TPCCTxnManager::init(uint64_t thd_id, Workload * h_wl) {
 	TxnManager::init(thd_id, h_wl);
 	_wl = (TPCCWorkload *) h_wl;
@@ -49,6 +51,7 @@ void TPCCTxnManager::reset() {
 }
 
 RC TPCCTxnManager::run_txn_post_wait() {
+  printf("事务%ld被重新唤醒,重新获取锁.此刻next_item_id:%d， items的size: %d\n",get_txn_id(),next_item_id, ((TPCCQuery*) query)->items.size());
     get_row_post_wait(row);
     next_tpcc_state();
     return RCOK;
@@ -62,7 +65,6 @@ RC TPCCTxnManager::run_txn() {
   RC rc = RCOK;
   uint64_t starttime = get_sys_clock();
 
-
   if(IS_LOCAL(txn->txn_id) && (state == TPCC_PAYMENT0 || state == TPCC_NEWORDER0)) {
     DEBUG("Running txn %ld\n",txn->txn_id);
 #if DISTR_DEBUG
@@ -70,21 +72,46 @@ RC TPCCTxnManager::run_txn() {
 #endif
     query->partitions_touched.add_unique(GET_PART_ID(0,g_node_id));
   }
-
+  if (isImitateTxn()) {
+    printf("当前next_item_id为:%d，重置为0\n",next_item_id);
+    next_item_id = 0;
+  }
   //  注意这里是while，因为执行一个事务不止处理一个entry
   while(rc == RCOK && !is_done()) {
+    if (glob_manager.getSyncFlag() && !sync_exec && wh_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId() && !isRemoteTxn() && !isImitateTxn()) {
+      //  开启活跃事务迁移
+      sync_exec = true;
+      query->partitions_touched.add_unique(glob_manager.getDestId());
+      TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
+      msg->imitate_txn = true;
+      msg->state = ((TPCCQuery*)query)->txn_type == TPCC_NEW_ORDER ? TPCC_NEWORDER0 : TPCC_PAYMENT0;
+      uint64_t dest_id = glob_manager.getDestId();
+      printf("发送事务%ld的同步迁移事务，事务类型:%d,destid为:%d\n",get_txn_id(),msg->state, dest_id);
+      msg_queue.enqueue(get_thd_id(),msg, dest_id);
+      ATOM_ADD(glob_manager.migration_stat.imitate_txn, 1);
+    }
+    if (sync_exec_rtn_abort) {
+      rc = Abort;
+    }
     rc = run_txn_state();
   }
-
+  //  对象：目标节点
+  //   ----同步过程影子事务执行出错,在调用该函数的worker_thread层进行：告诉源节点需要回滚，然后目标这边先不终止，而是停止运行,等待源节点用2pc终止
+  if (rc == Abort && imitate_txn) {
+    return rc;
+  }
   uint64_t curr_time = get_sys_clock();
   txn_stats.process_time += curr_time - starttime;
   txn_stats.process_time_short += curr_time - starttime;
-
+  //   对象：源节点
+  //   源节点进行2pc中止该事务
   if(IS_LOCAL(get_txn_id())) {
     if(is_done() && rc == RCOK) 
-      rc = start_commit();
+      rc = start_commit(); // 会发送finish消息
     else if(rc == Abort)
-      rc = start_abort();
+      rc = start_abort();  //  会发送finish消息
+    else if (rc == WAIT) { // wait什么都不用做，只需要在需要唤醒的地方创建RTXN消息放到消息队列
+    }
   }
 
   return rc;
@@ -101,9 +128,17 @@ bool TPCCTxnManager::is_done() {
       break;
     case TPCC_NEW_ORDER:
       //done = next_item_id == tpcc_query->ol_cnt || state == TPCC_FIN;
-      done = next_item_id == tpcc_query->items.size() || state == TPCC_FIN;
+      if (state == TPCC_NEWORDER0 ) {
+        done = false;
+      } else {
+        done = next_item_id == tpcc_query->items.size() || state == TPCC_FIN;
+      }
+      
       break;
-    default: assert(false);
+    default: 
+      // return RCOK;
+      printf("事务%ld出错",get_txn_id());
+    assert(false);
   }
 
   
@@ -137,9 +172,11 @@ RC TPCCTxnManager::acquire_locks() {
       if(GET_NODE_ID(part_id_w) == g_node_id) {
       // WH
         index = _wl->i_warehouse;
+        // cout << "acquire_locks：调用index_read";
         item = index_read(index, w_id, part_id_w);
         row_t * row = ((row_t *)item->location);
         rc2 = get_lock(row,g_wh_update? WR:RD);
+        // get_lock是Calvin需要用到的
         if(rc2 != RCOK)
           rc = rc2;
 
@@ -153,7 +190,7 @@ RC TPCCTxnManager::acquire_locks() {
       }
       if(GET_NODE_ID(part_id_c_w) == g_node_id) {
       // Cust
-        if (tpcc_query->by_last_name) { 
+        if (tpcc_query->by_last_name) {
 
           key = custNPKey(c_last, c_d_id, c_w_id);
           index = _wl->i_customer_last;
@@ -302,7 +339,7 @@ void TPCCTxnManager::next_tpcc_state() {
       break;
     case TPCC_NEWORDER9:
       ++next_item_id;
-      if(!IS_LOCAL(txn->txn_id) || !is_done()) {
+      if(!is_done()) {
         state = TPCC_NEWORDER6;
       }
       else {
@@ -326,6 +363,13 @@ bool TPCCTxnManager::is_local_item(uint64_t idx) {
 
 
 RC TPCCTxnManager::send_remote_request() {
+  if (isImitateTxn()) {
+    return RCOK; // 目标节点不需要做该事情
+  }
+  if (sync_exec && wh_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId()) {
+    setRemoteTxn();
+    return RCOK; //  指的是迁移事务被发往目标执行了，因此不需要继续发送远程执行
+  }
   assert(IS_LOCAL(get_txn_id()));
   TPCCQuery* tpcc_query = (TPCCQuery*) query;
   TPCCRemTxnType next_state = TPCC_FIN;
@@ -356,10 +400,14 @@ RC TPCCTxnManager::send_remote_request() {
     assert(false);
   }
   TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
+  printf("事务%ld发出阶段%d的远程执行请求，远程节点:%d\n",get_txn_id(),state, dest_node_id);
   msg->state = state;
+  msg->imitate_txn = false;
   query->partitions_touched.add_unique(GET_PART_ID(0,dest_node_id));
   msg_queue.enqueue(get_thd_id(),msg,dest_node_id);
+  glob_manager.migration_stat.addBlockedTxn(get_txn_id(), true, std::chrono::system_clock::now()); //  myt add:用于分布式事务超时终止
   state = next_state;
+  set_rc(WAIT_REM); // 这个本来打算做判断分布式事务阻塞时判断是否在远程执行，然后终止事务时依据该状态来发送远程终止，但是发现有其他可以用的成员，暂时无用
   return WAIT_REM;
 }
 
@@ -368,12 +416,28 @@ void TPCCTxnManager::copy_remote_items(TPCCQueryMessage * msg) {
   msg->items.init(tpcc_query->items.size());
   if(tpcc_query->txn_type == TPCC_PAYMENT)
     return;
-  uint64_t dest_node_id = GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id));
-  while(next_item_id < tpcc_query->items.size() && !is_local_item(next_item_id) && GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id)) == dest_node_id) {
-    Item_no * req = (Item_no*) mem_allocator.alloc(sizeof(Item_no));
-    req->copy(tpcc_query->items[next_item_id++]);
-    msg->items.add(req);
+ 
+  //  如果是模仿事务，new_order_0发送也需要这些重做数据
+  if (!isSyncExec() && next_item_id < tpcc_query->items.size()) {
+    uint64_t dest_node_id = GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id));
+    while(next_item_id < tpcc_query->items.size() && !is_local_item(next_item_id) && GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id)) == dest_node_id) {
+      // printf("事务%ld复制item\n",get_txn_id());
+      Item_no * req = (Item_no*) mem_allocator.alloc(sizeof(Item_no));
+      req->copy(tpcc_query->items[next_item_id]);
+      ++next_item_id;
+      msg->items.add(req);
+      // printf("事务%ld  :item的size:%d ,next_item_id为%d\n", get_txn_id(), tpcc_query->items.size(), next_item_id);
+    }
+  } else {
+    size_t idx = 0;
+    while (idx < tpcc_query->items.size()) {
+      Item_no * req = (Item_no*) mem_allocator.alloc(sizeof(Item_no));
+      req->copy(tpcc_query->items[idx]);
+      ++idx;
+      msg->items.add(req);
+    }
   }
+
 }
 
 
@@ -394,7 +458,7 @@ RC TPCCTxnManager::run_txn_state() {
     uint64_t ol_i_id = 0; // 订单商品id
     uint64_t ol_supply_w_id = 0;  //  订单供应仓库id
     uint64_t ol_quantity = 0; //  订单行数量
-    if(tpcc_query->txn_type == TPCC_NEW_ORDER) {//  新订单，可能涉及购买到多个商品，每个商品涉及到的数据有订单商品id，供应仓库id，数量
+    if(tpcc_query->txn_type == TPCC_NEW_ORDER && next_item_id < tpcc_query->items.size()) {//  新订单，可能涉及购买到多个商品，每个商品涉及到的数据有订单商品id，供应仓库id，数量
         ol_i_id = tpcc_query->items[next_item_id]->ol_i_id;
         ol_supply_w_id = tpcc_query->items[next_item_id]->ol_supply_w_id;
         ol_quantity = tpcc_query->items[next_item_id]->ol_quantity;
@@ -409,16 +473,21 @@ RC TPCCTxnManager::run_txn_state() {
     bool w_loc = GET_NODE_ID(part_id_w) == g_node_id;
     bool c_w_loc = GET_NODE_ID(part_id_c_w) == g_node_id;
     bool ol_supply_w_loc = GET_NODE_ID(part_id_ol_supply_w) == g_node_id;
-
+    if (tpcc_query->txn_type == TPCC_NEW_ORDER && isRemoteTxn()) {
+      printf("远程执行事务%ld的next_item_id为%ld,当前阶段:%d\n", get_txn_id(), next_item_id, state);
+    }
 	RC rc = RCOK;
 
 	switch (state) {
     //  row 为成员变量，下一个state依旧会使用（如run_payment_0获取的row，到run_payment_1才进行修改
 		case TPCC_PAYMENT0 :
-            if(w_loc)
+            if(w_loc || isImitateTxn())
                     rc = run_payment_0(w_id, d_id, d_w_id, h_amount, row);
-            else {
+            else {  //  目标节点的模仿事务会执行这个分支所以在里面添加了判断
               rc = send_remote_request();
+              if (isSyncExec()) {
+                state = TPCC_PAYMENT1;
+              }
             }
             break;
 		case TPCC_PAYMENT1 :
@@ -431,7 +500,7 @@ RC TPCCTxnManager::run_txn_state() {
             rc = run_payment_3(w_id, d_id, d_w_id, h_amount, row);
             break;
 		case TPCC_PAYMENT4 :
-            if(c_w_loc)
+            if(c_w_loc || isImitateTxn())
                 rc = run_payment_4( w_id,  d_id, c_id, c_w_id,  c_d_id, c_last, h_amount, by_last_name, row);
             else {
                 rc = send_remote_request();
@@ -441,10 +510,13 @@ RC TPCCTxnManager::run_txn_state() {
             rc = run_payment_5( w_id,  d_id, c_id, c_w_id,  c_d_id, c_last, h_amount, by_last_name, row);
             break;
 		case TPCC_NEWORDER0 :
-            if(w_loc)
+            if(w_loc || isImitateTxn())
                 rc = new_order_0( w_id, d_id, c_id, remote, ol_cnt, o_entry_d, &tpcc_query->o_id, row);
             else {
                 rc = send_remote_request();
+                if (isSyncExec()) {
+                  state = TPCC_NEWORDER1;
+                }
             }
 			break;
 		case TPCC_NEWORDER1 :
@@ -463,10 +535,14 @@ RC TPCCTxnManager::run_txn_state() {
             rc = new_order_5( w_id, d_id, c_id, remote, ol_cnt, o_entry_d, &tpcc_query->o_id, row);
             break;
 		case TPCC_NEWORDER6 :
-			rc = new_order_6(ol_i_id, row);
+      if (!isSyncExec() || ol_supply_w_loc) {
+        rc = new_order_6(ol_i_id, row);
+      }
 			break;
 		case TPCC_NEWORDER7 :
-			rc = new_order_7(ol_i_id, row);
+			if (!isSyncExec() || ol_supply_w_loc) {
+        rc = new_order_7(ol_i_id, row);
+      }
 			break;
 		case TPCC_NEWORDER8 :
 		      if(ol_supply_w_loc) {
@@ -481,8 +557,9 @@ RC TPCCTxnManager::run_txn_state() {
             break;
     case TPCC_FIN :
         state = TPCC_FIN;
-        if(tpcc_query->rbk)
-            return Abort;
+        if(tpcc_query->rbk) {
+              return Abort;
+        }
             //return finish(tpcc_query,false);
         break;
     default:
@@ -491,6 +568,9 @@ RC TPCCTxnManager::run_txn_state() {
 
   if(rc == RCOK)
     next_tpcc_state();
+  else if (isRemoteTxn() && rc != RCOK){
+    printf("远程执行事务%ld执行失败\n",get_txn_id());
+  }
   return rc;
 }
 
@@ -500,6 +580,7 @@ inline RC TPCCTxnManager::run_payment_0(uint64_t w_id, uint64_t d_id, uint64_t d
 	uint64_t key;
 	itemid_t * item;
 /*====================================================+
+//  warehouse为热点行
     	EXEC SQL UPDATE warehouse SET w_ytd = w_ytd + :h_amount
 		WHERE w_id=:w_id;
 	+====================================================*/
@@ -524,7 +605,7 @@ inline RC TPCCTxnManager::run_payment_0(uint64_t w_id, uint64_t d_id, uint64_t d
   return rc;
 }
 
-//  仓库修改累计金额步骤二：执行修改操作 
+//  仓库修改累计金额步骤二：执行修改操作 ，即增加仓库金额
 inline RC TPCCTxnManager::run_payment_1(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t * r_wh_local) {
 
   assert(r_wh_local != NULL);
@@ -539,7 +620,7 @@ inline RC TPCCTxnManager::run_payment_1(uint64_t w_id, uint64_t d_id, uint64_t d
 		WHERE w_id=:w_id;
 	+===================================================================*/
 
-
+  printf("%执行payment\n");
 	double w_ytd;
 	r_wh_local->get_value(W_YTD, w_ytd);
 	if (g_wh_update) {
@@ -549,7 +630,7 @@ inline RC TPCCTxnManager::run_payment_1(uint64_t w_id, uint64_t d_id, uint64_t d
 }
 
 
-//  区域修改累计金额步骤一：读行后获取行（txn_manager::get_row())
+//  区域修改累计金额步骤一：读行后获取行（txn_manager::get_row()) ，修改区域金额，先读到该行
 inline RC TPCCTxnManager::run_payment_2(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t *& r_dist_local) {
 	/*=====================================================+
 		EXEC SQL UPDATE district SET d_ytd = d_ytd + :h_amount
@@ -563,10 +644,9 @@ inline RC TPCCTxnManager::run_payment_2(uint64_t w_id, uint64_t d_id, uint64_t d
 	row_t * r_dist = ((row_t *)item->location);
 	RC rc = get_row(r_dist, WR, r_dist_local);
   return rc;
-
 }
 
-//  区域修改累计金额步骤二：执行修改操作 
+//  区域修改累计金额步骤二：执行修改操作， 读到后修改
 inline RC TPCCTxnManager::run_payment_3(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t * r_dist_local) {
   assert(r_dist_local != NULL);
 
@@ -597,7 +677,7 @@ inline RC TPCCTxnManager::run_payment_4(uint64_t w_id, uint64_t d_id,uint64_t c_
 //  第一步，查询数据所在位置(item) ;第二步,通过管理器获取数据行的真正修改位置
 
 //  1.查找条件为客户的c_w_id,c_d_id和c_last（姓氏)
-	if (by_last_name) { 
+	if (by_last_name) {
 		/*==========================================================+
 			EXEC SQL SELECT count(c_id) INTO :namecnt
 			FROM customer
@@ -617,6 +697,7 @@ inline RC TPCCTxnManager::run_payment_4(uint64_t w_id, uint64_t d_id,uint64_t c_
 		// XXX: the list is not sorted. But let's assume it's sorted... 
 		// The performance won't be much different.
 		INDEX * index = _wl->i_customer_last;
+      // cout << "run_payment_4的index_read";
 		item = index_read(index, key, wh_to_part(c_w_id));
 		assert(item != NULL);
 		
@@ -656,6 +737,7 @@ inline RC TPCCTxnManager::run_payment_4(uint64_t w_id, uint64_t d_id,uint64_t c_
 		+======================================================================*/
 		key = custKey(c_id, c_d_id, c_w_id);
 		INDEX * index = _wl->i_customer_id;
+      // cout << "run_payment_4的index_read";
 		item = index_read(index, key, wh_to_part(c_w_id));
 		assert(item != NULL);
 		r_cust = (row_t *) item->location;
@@ -711,6 +793,7 @@ inline RC TPCCTxnManager::run_payment_5(uint64_t w_id, uint64_t d_id,uint64_t c_
 
 
 // new_order 0
+// customer和warehouse表，查看客户的信息以及仓库的税率
 inline RC TPCCTxnManager::new_order_0(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t *& r_wh_local) {
 	uint64_t key;
 	itemid_t * item;
@@ -722,20 +805,25 @@ inline RC TPCCTxnManager::new_order_0(uint64_t w_id, uint64_t d_id, uint64_t c_i
 	+========================================================================*/
 	key = w_id;
 	INDEX * index = _wl->i_warehouse; 
+    // cout << "new_order_0的index_read";
 	item = index_read(index, key, wh_to_part(w_id));
 	assert(item != NULL);
 	row_t * r_wh = ((row_t *)item->location);
+  //  RD,读操作
   RC rc = get_row(r_wh, RD, r_wh_local);
+  if (isImitateTxn()) {
+    printf("new_order_0模仿事务%ld执行后状态:%d\n", get_txn_id(),state);
+  }
   return rc;
 }
-
+// 读仓库税率
 inline RC TPCCTxnManager::new_order_1(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t * r_wh_local) {
   assert(r_wh_local != NULL);
 	double w_tax;
 	r_wh_local->get_value(W_TAX, w_tax); 
   return RCOK;
 }
-
+// 以RD方式获取custom的行
 inline RC TPCCTxnManager::new_order_2(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t *& r_cust_local) {
 	uint64_t key;
 	itemid_t * item;
@@ -748,6 +836,7 @@ inline RC TPCCTxnManager::new_order_2(uint64_t w_id, uint64_t d_id, uint64_t c_i
   return rc;
 }
 
+// 读custom行的discount值，客户折扣率
 inline RC TPCCTxnManager::new_order_3(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t * r_cust_local) {
   assert(r_cust_local != NULL);
 	uint64_t c_discount;
@@ -878,11 +967,14 @@ inline RC TPCCTxnManager::new_order_8(uint64_t w_id,uint64_t  d_id,bool remote, 
 		assert(item != NULL);
 		row_t * r_stock = ((row_t *)item->location);
     RC rc = get_row(r_stock, WR, r_stock_local);
+    if (isRemoteTxn() && rc != RCOK) {
+      printf("远程执行事务%ld的new_order8:getrow失败,状态为:%d\n",get_txn_id(),rc);
+    } 
     return rc;
 }
 		
 inline RC TPCCTxnManager::new_order_9(uint64_t w_id,uint64_t  d_id,bool remote, uint64_t ol_i_id, uint64_t ol_supply_w_id, uint64_t ol_quantity,uint64_t  ol_number, uint64_t ol_amount, uint64_t  o_id, row_t * r_stock_local) {
-  assert(r_stock_local != NULL);
+  // assert(r_stock_local != NULL);
 		// XXX s_dist_xx are not retrieved.
 		UInt64 s_quantity;
 		int64_t s_remote_cnt;
