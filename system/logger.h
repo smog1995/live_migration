@@ -27,6 +27,10 @@ struct CmdLogRecord {
   char * params; // input parameters for this transaction type
 };
 
+#ifndef MAX_NUM_COL
+#define MAX_NUM_COL 17
+#endif
+
 // ARIES-style log record (physiological logging)
 struct AriesLogRecord {
   void init() {
@@ -35,8 +39,11 @@ struct AriesLogRecord {
     type = LRT_UPDATE;
     iud = L_UPDATE;
     txn_id = UINT64_MAX; 
-    table_id = 0;
+    // table_id = 0;
     key = UINT64_MAX;
+    state = UINT32_MAX;
+    part_id = 0;
+    n_cols = 0;
   }
 
   uint32_t checksum;
@@ -44,27 +51,26 @@ struct AriesLogRecord {
   LogRecType type;
   LogIUD iud;
   uint64_t txn_id; // transaction id
-  //uint32_t partid; // partition id
-  uint32_t table_id; // table being updated
+  // uint32_t table_id; // table being updated
   uint64_t key; // primary key (determines the partition ID)
-  // TODO: column list
   
-  /*lsn
-  uint32_t n_cols; //how many columns are being updated
-  uint32_t* cols; //ids of modified columns
-  uint32_t before_image_size; 
-  char * before_image; // data buffer for before image
-  uint32_t after_image_size; 
-  char * after_image; // data buffer for after image
-  */
-
+  // log for live migration
+  // 每条日志存一行数据
+  uint32_t state;    // run_txn_state
+  uint32_t part_id;      // partition id
+  uint32_t n_cols;      //how many columns are being updated
+  uint32_t id_cols[MAX_NUM_COL];       //id of modified column
+  // uint32_t before_image_size; 
+  char before_image[MAX_TUPLE_SIZE];  // data buffer for before image
+  // uint32_t after_image_size; 
+  char after_image[MAX_TUPLE_SIZE];   // data buffer for after image
 };
 
 class LogRecord {
 public:
   //LogRecord();
   LogRecType getType() { return rcd.type; }
-  void copyRecord( LogRecord * record);
+  void copyRecord(LogRecord *record);
   // TODO: compute a reasonable checksum
   uint64_t computeChecksum() {return (uint64_t)rcd.txn_id;};
 #if LOG_COMMAND
@@ -74,7 +80,6 @@ public:
 #endif
 private:
   bool isValid;
-
 };
 
 class Logger {
@@ -82,15 +87,27 @@ public:
   void init(const char * log_file);
   void release();
   void flushBufferCheck(uint64_t thd_id);
-  LogRecord * createRecord(LogRecord* record);
+  LogRecord *createRecord(LogRecord* record);
 
-  LogRecord * createRecord(
-    //LogRecType type,
+  LogRecord *createRecord(
+    // LogRecType type,
     uint64_t txn_id,
     LogIUD iud,
-    //uint64_t partid,
-    uint64_t table_id,
-    uint64_t key);
+    uint64_t key,
+    uint64_t part_id
+  );
+  LogRecord *createRecord(
+    // LogRecType type,
+    uint64_t txn_id,
+    LogIUD iud,
+    uint64_t key,
+    uint32_t state,       // run_txn_state
+    uint32_t part_id,      // partition id
+    uint32_t n_cols,
+    uint32_t *id_cols,       //ids of modified columns
+    char *before_image,
+    char *after_image
+  );
   void enqueueRecord(LogRecord* record); 
   void processRecord(uint64_t thd_id); 
   void writeToBuffer(uint64_t thd_id,char * data, uint64_t size); 

@@ -19,82 +19,10 @@
 
 #include "helper.h"
 #include "global.h"
-#include "migration_stat.h"
-#include <mutex>
-#include <unordered_map>
+
 class row_t;
 class TxnManager;
 
-
-class LockManager {
-public: 
-	class LockRequest {
-		public:
-			LockRequest(txnid_t txn_id, lock_t lock_type) 
-				:txn_id_(txn_id), lock_type_(lock_type) {grant_ = false;}
-		
-			bool grant_;
-			txnid_t txn_id_;
-			lock_t lock_type_;
-	};
-	class LockRequestQueue {
-		public:
-		// 锁请求队列
-			LockRequestQueue():latch_(false), granted_count_(0) {}
-			list<unique_ptr<LockRequest>> request_queue_;
-			bool latch_;
-			uint32_t granted_count_;
-	};
-	LockManager() {
-
-		// 初始化table_name
-		// row_lock_map_latch_ = false;
-		vector<string> table_list;
-		string schema_file = "benchmarks/TPCC_full_schema.txt";
-		ifstream fin(schema_file);
-		string line;
-			if (!fin.is_open()) {
-			cerr << "Error: Could not open file " << schema_file << endl;
-			cerr << "Reason: " << strerror(errno) << endl;
-		}
-		while (getline(fin, line)) {
-			// cout << line << " line";
-			if (line.compare(0, 6, "TABLE=") == 0) {
-				table_list.emplace_back(string(&line[6]));
-			}
-		}
-		
-		for (string &table_name: table_list) {
-			row_lock_map_latch_.insert({table_name,false});
-		}
-		
-	}
-	unordered_map<string, unordered_map<uint64_t, std::shared_ptr<LockRequestQueue>>> row_lock_map_;
-	unordered_map<string, bool> row_lock_map_latch_;
-	RC lockRow(TxnManager* txn_man, lock_t lock_type, uint64_t row_key, string table_name, bool migration_part = false);
-	RC unlockRow(TxnManager* txn_man, uint64_t row_key, string table_name);
-	//  S，X
-	bool compatable_lock_[2][2] = {
-		{false, false},
-		{false, true}
-	};
-	// std::unordered_map<txnid_t, std::vector<txnid_t>> wait_for_;
-	// bool wait_for_latch_;
-	bool Compatibale(lock_t type_a, lock_t type_b) {
-		return compatable_lock_[type_a][type_b];
-	}
-	void deathLockDetection(uint64_t thd_id);
-	txnid_t cycleDetection(std::unordered_map<txnid_t, std::vector<txnid_t>>& waits_for);
-	void depthFirstSearch(txnid_t vertex, bool& has_cycle, txnid_t& youngest_txn, unordered_map<txnid_t, bool>& onpath,
-				 unordered_map<txnid_t, bool>& visited, unordered_map<txnid_t, vector<txnid_t>>& waits_for);
-	void lockRequestDump(uint64_t rowkey, string table_name);
-	
-	
-};
-
-// class Statistics {
-
-// };
 class Manager {
 public:
 	void 			init();
@@ -111,49 +39,15 @@ public:
 	
 	TxnManager * 		get_txn_man(int thd_id) { return _all_txns[thd_id]; };
 	void 			set_txn_man(TxnManager * txn);
-
-
-	//  同步阶段处理
-	void		setSyncState(bool flag, int part_id,int dest_id) {
-		
-		sync_exec = flag;
-		partition_id = part_id;
-		migration_dest_id = dest_id;
-		printf("同步标志设置为%d",sync_exec);
-	}
-	void 		setDestId(int destid) { migration_dest_id = destid; }
-	void		setPartId(int partid) { partition_id = partid;	}
-	int 		getPartId()   {	return partition_id;}
-	//   只有需要发送迁移事务的节点这里为true
-	bool        getSyncFlag() { return sync_exec;}
-	int 		getDestId()	  { return migration_dest_id;}
-	LockManager lock_manager;
-	MigrationStat migration_stat;
 private:
 	pthread_mutex_t ts_mutex;
 	uint64_t 		timestamp;
 	pthread_mutex_t mutexes[BUCKET_CNT];
-
-
 	uint64_t 		hash(row_t * row);
 	ts_t * volatile all_ts;
 	TxnManager ** 		_all_txns;
 	ts_t			last_min_ts_time;
 	ts_t			min_ts;
-	
-	vector<int> local_partitions;
-	
-	
-
-	//  同步迁移控制flag
-
-	bool sync_exec = false;
-	//  正迁移的分区
-	int partition_id = -1;
-	int migration_dest_id = -1;
-
 };
 
 #endif
-
-

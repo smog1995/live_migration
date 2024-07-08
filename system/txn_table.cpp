@@ -26,9 +26,8 @@
 #include "row.h"
 #include "pool.h"
 #include "work_queue.h"
-#include "msg_queue.h"
 #include "message.h"
-class MessageQueue;
+
 void TxnTable::init() {
   //pool_size = g_inflight_max * g_node_cnt * 2 + 1;
   pool_size = g_inflight_max + 1;
@@ -78,10 +77,6 @@ void TxnTable::update_min_ts(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id,
 }
 
 TxnManager * TxnTable::get_transaction_manager(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id){
-  // assert(txn_id != UINT64_MAX);
-  // if (txn_id == UINT64_MAX) { // myt add:对于一些不需要事务执行的消息，无需获取
-  //   return NULL;
-  // }
   DEBUG("TxnTable::get_txn_manager %ld / %ld\n",txn_id,pool_size);
   uint64_t starttime = get_sys_clock();
   uint64_t pool_id = txn_id % pool_size;
@@ -95,7 +90,7 @@ TxnManager * TxnTable::get_transaction_manager(uint64_t thd_id, uint64_t txn_id,
   TxnManager * txn_man = NULL;
 
   uint64_t prof_starttime = get_sys_clock();
-  while (t_node != NULL) { //  如果之前事务因阻塞需要重启，那么肯定能在该对应的池中找到该事务的管理器
+  while (t_node != NULL) { //  找到该txn对应的txnman
     if(is_matching_txn_node(t_node,txn_id,batch_id)) {
       txn_man = t_node->txn_man;
       break;
@@ -104,19 +99,20 @@ TxnManager * TxnTable::get_transaction_manager(uint64_t thd_id, uint64_t txn_id,
   }
   INC_STATS(thd_id,mtx[20],get_sys_clock()-prof_starttime);
 
-  // 如果没有对应的txnman说明为新事务，需为之设置一个txn_man
+
   if(!txn_man) {
     prof_starttime = get_sys_clock();
-    //  向事务表池加入申请存放新事务管理器
+
     txn_table_pool.get(thd_id,t_node);
 
     INC_STATS(thd_id,mtx[21],get_sys_clock()-prof_starttime);
     prof_starttime = get_sys_clock();
-    //  申请新的事务管理器
+
     txn_man_pool.get(thd_id,txn_man);
 
     INC_STATS(thd_id,mtx[22],get_sys_clock()-prof_starttime);
     prof_starttime = get_sys_clock();
+
     txn_man->set_txn_id(txn_id);
     txn_man->set_batch_id(batch_id);
     t_node->txn_man = txn_man;
@@ -137,7 +133,7 @@ TxnManager * TxnTable::get_transaction_manager(uint64_t thd_id, uint64_t txn_id,
 
   }
 
-#if CC_ALG == MVCC  || CC_ALG == MVCC2PL
+#if CC_ALG == MVCC
   if(txn_man->get_timestamp() < pool[pool_id]->min_ts)
     pool[pool_id]->min_ts = txn_man->get_timestamp();
 #endif
@@ -152,7 +148,7 @@ TxnManager * TxnTable::get_transaction_manager(uint64_t thd_id, uint64_t txn_id,
 
 }
 // @input : thd_id只用于最后统计线程的一些运行时间
-void TxnTable::restart_txn(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id) {
+void TxnTable::restart_txn(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id){
   uint64_t pool_id = txn_id % pool_size;
   // set modify bit for this pool: txn_id % pool_size
   while(!ATOM_CAS(pool[pool_id]->modify,false,true)) { };
@@ -162,13 +158,8 @@ void TxnTable::restart_txn(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id) {
   while (t_node != NULL) {
     if(is_matching_txn_node(t_node,txn_id,batch_id)) {
 #if CC_ALG == CALVIN
-      
       work_queue.enqueue(thd_id,Message::create_message(t_node->txn_man,RTXN),false);
 #else
-      if (t_node->txn_man->get_rc() == Abort) {
-        printf("唤醒的事务%ld为abort事务,跳过\n",t_node->txn_man->get_txn_id());
-        return ;
-      }
       if(IS_LOCAL(txn_id))
         work_queue.enqueue(thd_id,Message::create_message(t_node->txn_man,RTXN_CONT),false);
       else
@@ -184,39 +175,6 @@ void TxnTable::restart_txn(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id) {
 
 }
 
-void TxnTable::restart_txn_abort(uint64_t thd_id, uint64_t txn_id) {
-  uint64_t pool_id = txn_id % pool_size;
-  while(!ATOM_CAS(pool[pool_id]->modify,false,true)) { };
-
-  txn_node_t t_node = pool[pool_id]->head;
-
-  while(t_node != NULL) {
-    if (is_matching_txn_node(t_node, txn_id, 0)) {
-#if CC_ALG == MVCC2PL
-        TxnManager* txn = t_node->txn_man;
-        printf("txn_table创建事务%ld的abort消息\n",txn_id);
-                
-        work_queue.enqueue(thd_id, Message::create_message(t_node->txn_man, RTXN_ABORT), false);
-        // txn->start_abort();
-        if (t_node->txn_man->is_multi_part()) {
-          auto partitions_touched = t_node->txn_man->query->partitions_touched;
-          for (size_t i = 0; i < partitions_touched.size(); i++) {
-              if (partitions_touched[i] == g_node_id) {
-                continue;
-              }
-              printf("发送给在节点%d上远程执行的子事务进行终止\n",partitions_touched[i]);
-              msg_queue.enqueue(thd_id, Message::create_message(t_node->txn_man, RTXN_ABORT), partitions_touched[i]);
-          }
-        }
-#endif
-      break;
-    }
-    t_node = t_node->next;
-  }
-  ATOM_CAS(pool[pool_id]->modify,true,false);
-}
-
-
 void TxnTable::release_transaction_manager(uint64_t thd_id, uint64_t txn_id, uint64_t batch_id){
   uint64_t starttime = get_sys_clock();
 
@@ -228,7 +186,7 @@ void TxnTable::release_transaction_manager(uint64_t thd_id, uint64_t txn_id, uin
 
   txn_node_t t_node = pool[pool_id]->head;
 
-#if CC_ALG == MVCC || CC_ALG == MVCC2PL
+#if CC_ALG == MVCC
   uint64_t min_ts = UINT64_MAX;
   txn_node_t saved_t_node = NULL;
 #endif
@@ -238,7 +196,7 @@ void TxnTable::release_transaction_manager(uint64_t thd_id, uint64_t txn_id, uin
     if(is_matching_txn_node(t_node,txn_id,batch_id)) {
       LIST_REMOVE_HT(t_node,pool[txn_id % pool_size]->head,pool[txn_id % pool_size]->tail);
       --pool[pool_id]->cnt;
-#if CC_ALG == MVCC || CC_ALG == MVCC2PL
+#if CC_ALG == MVCC
     saved_t_node = t_node;
     t_node = t_node->next;
     continue;
@@ -246,7 +204,7 @@ void TxnTable::release_transaction_manager(uint64_t thd_id, uint64_t txn_id, uin
       break;
 #endif
     }
-#if CC_ALG == MVCC || CC_ALG == MVCC2PL
+#if CC_ALG == MVCC
     if(t_node->txn_man->get_timestamp() < min_ts)
       min_ts = t_node->txn_man->get_timestamp();
 #endif
@@ -255,7 +213,7 @@ void TxnTable::release_transaction_manager(uint64_t thd_id, uint64_t txn_id, uin
   INC_STATS(thd_id,mtx[25],get_sys_clock()-prof_starttime);
   prof_starttime = get_sys_clock();
 
-#if CC_ALG == MVCC  || CC_ALG == MVCC2PL
+#if CC_ALG == MVCC
   t_node = saved_t_node;
   pool[pool_id]->min_ts = min_ts;
 #endif

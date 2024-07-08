@@ -20,16 +20,18 @@ void Logger::release() {
 LogRecord * Logger::createRecord( 
     uint64_t txn_id,
     LogIUD iud,
-    uint64_t table_id,
-    uint64_t key
+    // uint64_t table_id,
+    uint64_t key,
+    uint64_t part_id
     ) {
   LogRecord * record = (LogRecord*)mem_allocator.alloc(sizeof(LogRecord));
   record->rcd.init();
   record->rcd.lsn = ATOM_FETCH_ADD(lsn,1);
   record->rcd.iud = iud;
   record->rcd.txn_id = txn_id;
-  record->rcd.table_id = table_id;
+  // record->rcd.table_id = table_id;
   record->rcd.key = key;
+  record->rcd.part_id = part_id;
   return record;
 }
 
@@ -51,8 +53,48 @@ void LogRecord::copyRecord(
   rcd.iud = record->rcd.iud;
   rcd.type = record->rcd.type;
   rcd.txn_id = record->rcd.txn_id;
-  rcd.table_id = record->rcd.table_id;
+  // rcd.table_id = record->rcd.table_id;
   rcd.key = record->rcd.key;
+  // log for live migration
+  rcd.state = record->rcd.state;
+  rcd.part_id = record->rcd.part_id;
+  rcd.n_cols = record->rcd.n_cols;
+  for (uint32_t i = 0; i < rcd.n_cols; i++) {
+    rcd.id_cols[i] = record->rcd.id_cols[i];
+  }
+  memcpy(rcd.before_image, record->rcd.before_image, 1024);
+  memcpy(rcd.after_image, record->rcd.after_image, 1024);
+}
+
+LogRecord * Logger::createRecord(
+  //LogRecType type,
+  uint64_t txn_id,
+  LogIUD iud,
+  // uint64_t table_id,
+  uint64_t key,
+  uint32_t state,
+  uint32_t part_id,      // partition id
+  uint32_t n_cols,
+  uint32_t *id_cols,       //id of modified column
+  char *before_image,
+  char *after_image
+) {
+  LogRecord * record = (LogRecord*)mem_allocator.alloc(sizeof(LogRecord));
+  record->rcd.init();
+  record->rcd.lsn = ATOM_FETCH_ADD(lsn,1);
+  record->rcd.iud = iud;
+  record->rcd.txn_id = txn_id;
+  // record->rcd.table_id = table_id;
+  record->rcd.key = key;
+  record->rcd.state = state;
+  record->rcd.part_id = part_id;
+  record->rcd.n_cols = n_cols;
+  for (uint32_t i = 0; i < n_cols; i++) {
+    record->rcd.id_cols[i] = id_cols[i];
+  }
+  memcpy(record->rcd.before_image, before_image, 1024);
+  memcpy(record->rcd.after_image, after_image, 1024);
+  return record;
 }
 
 
@@ -81,6 +123,7 @@ void Logger::processRecord(uint64_t thd_id) {
       flushBuffer(thd_id);
       work_queue.enqueue(thd_id,Message::create_message(record->rcd.txn_id,LOG_FLUSHED),false);
     }
+    // printf("logger processRecoed\n");
     writeToBuffer(thd_id,record);
     //writeToBuffer((char*)(&record->rcd),sizeof(record->rcd));
     log_buf_cnt++;
@@ -138,12 +181,17 @@ void Logger::writeToBuffer(uint64_t thd_id, LogRecord * record) {
   WRITE_VAL(log_file,record->rcd.type);
   WRITE_VAL(log_file,record->rcd.iud);
   WRITE_VAL(log_file,record->rcd.txn_id);
-  //WRITE_VAL(log_file,record->rcd.partid);
-  WRITE_VAL(log_file,record->rcd.table_id);
-
-
-  
+  // WRITE_VAL(log_file,record->rcd.table_id);
   WRITE_VAL(log_file,record->rcd.key);
+  // log for live migrarion
+  WRITE_VAL(log_file, record->rcd.state);
+  WRITE_VAL(log_file, record->rcd.part_id);
+  WRITE_VAL(log_file, record->rcd.n_cols);
+  for (uint32_t i = 0; i < MAX_NUM_COL; i++) {
+    WRITE_VAL(log_file, record->rcd.id_cols[i]);
+  }
+  WRITE_VAL_SIZE(log_file, record->rcd.before_image, MAX_TUPLE_SIZE);
+  WRITE_VAL_SIZE(log_file, record->rcd.after_image, MAX_TUPLE_SIZE);
   /*
   WRITE_VAL(log_file,record->rcd.n_cols);
   WRITE_VAL(log_file,record->rcd.cols);

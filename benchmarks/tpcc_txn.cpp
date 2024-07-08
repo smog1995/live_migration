@@ -29,8 +29,7 @@
 #include "transport.h"
 #include "msg_queue.h"
 #include "message.h"
-#include "manager.h"
-class Manager;
+
 void TPCCTxnManager::init(uint64_t thd_id, Workload * h_wl) {
 	TxnManager::init(thd_id, h_wl);
 	_wl = (TPCCWorkload *) h_wl;
@@ -51,7 +50,6 @@ void TPCCTxnManager::reset() {
 }
 
 RC TPCCTxnManager::run_txn_post_wait() {
-  printf("事务%ld被重新唤醒,重新获取锁.此刻next_item_id:%d， items的size: %d\n",get_txn_id(),next_item_id, ((TPCCQuery*) query)->items.size());
     get_row_post_wait(row);
     next_tpcc_state();
     return RCOK;
@@ -65,6 +63,7 @@ RC TPCCTxnManager::run_txn() {
   RC rc = RCOK;
   uint64_t starttime = get_sys_clock();
 
+
   if(IS_LOCAL(txn->txn_id) && (state == TPCC_PAYMENT0 || state == TPCC_NEWORDER0)) {
     DEBUG("Running txn %ld\n",txn->txn_id);
 #if DISTR_DEBUG
@@ -72,46 +71,21 @@ RC TPCCTxnManager::run_txn() {
 #endif
     query->partitions_touched.add_unique(GET_PART_ID(0,g_node_id));
   }
-  if (isImitateTxn()) {
-    printf("当前next_item_id为:%d，重置为0\n",next_item_id);
-    next_item_id = 0;
-  }
+
   //  注意这里是while，因为执行一个事务不止处理一个entry
   while(rc == RCOK && !is_done()) {
-    if (glob_manager.getSyncFlag() && !sync_exec && wh_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId() && !isRemoteTxn() && !isImitateTxn()) {
-      //  开启活跃事务迁移
-      sync_exec = true;
-      query->partitions_touched.add_unique(glob_manager.getDestId());
-      TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
-      msg->imitate_txn = true;
-      msg->state = ((TPCCQuery*)query)->txn_type == TPCC_NEW_ORDER ? TPCC_NEWORDER0 : TPCC_PAYMENT0;
-      uint64_t dest_id = glob_manager.getDestId();
-      printf("发送事务%ld的同步迁移事务，事务类型:%d,destid为:%d\n",get_txn_id(),msg->state, dest_id);
-      msg_queue.enqueue(get_thd_id(),msg, dest_id);
-      ATOM_ADD(glob_manager.migration_stat.imitate_txn, 1);
-    }
-    if (sync_exec_rtn_abort) {
-      rc = Abort;
-    }
     rc = run_txn_state();
   }
-  //  对象：目标节点
-  //   ----同步过程影子事务执行出错,在调用该函数的worker_thread层进行：告诉源节点需要回滚，然后目标这边先不终止，而是停止运行,等待源节点用2pc终止
-  if (rc == Abort && imitate_txn) {
-    return rc;
-  }
+
   uint64_t curr_time = get_sys_clock();
   txn_stats.process_time += curr_time - starttime;
   txn_stats.process_time_short += curr_time - starttime;
-  //   对象：源节点
-  //   源节点进行2pc中止该事务
+
   if(IS_LOCAL(get_txn_id())) {
     if(is_done() && rc == RCOK) 
-      rc = start_commit(); // 会发送finish消息
+      rc = start_commit();
     else if(rc == Abort)
-      rc = start_abort();  //  会发送finish消息
-    else if (rc == WAIT) { // wait什么都不用做，只需要在需要唤醒的地方创建RTXN消息放到消息队列
-    }
+      rc = start_abort();
   }
 
   return rc;
@@ -128,17 +102,9 @@ bool TPCCTxnManager::is_done() {
       break;
     case TPCC_NEW_ORDER:
       //done = next_item_id == tpcc_query->ol_cnt || state == TPCC_FIN;
-      if (state == TPCC_NEWORDER0 ) {
-        done = false;
-      } else {
-        done = next_item_id == tpcc_query->items.size() || state == TPCC_FIN;
-      }
-      
+      done = next_item_id == tpcc_query->items.size() || state == TPCC_FIN;
       break;
-    default: 
-      // return RCOK;
-      printf("事务%ld出错",get_txn_id());
-    assert(false);
+    default: assert(false);
   }
 
   
@@ -176,7 +142,6 @@ RC TPCCTxnManager::acquire_locks() {
         item = index_read(index, w_id, part_id_w);
         row_t * row = ((row_t *)item->location);
         rc2 = get_lock(row,g_wh_update? WR:RD);
-        // get_lock是Calvin需要用到的
         if(rc2 != RCOK)
           rc = rc2;
 
@@ -190,7 +155,7 @@ RC TPCCTxnManager::acquire_locks() {
       }
       if(GET_NODE_ID(part_id_c_w) == g_node_id) {
       // Cust
-        if (tpcc_query->by_last_name) {
+        if (tpcc_query->by_last_name) { 
 
           key = custNPKey(c_last, c_d_id, c_w_id);
           index = _wl->i_customer_last;
@@ -339,7 +304,7 @@ void TPCCTxnManager::next_tpcc_state() {
       break;
     case TPCC_NEWORDER9:
       ++next_item_id;
-      if(!is_done()) {
+      if(!IS_LOCAL(txn->txn_id) || !is_done()) {
         state = TPCC_NEWORDER6;
       }
       else {
@@ -363,13 +328,6 @@ bool TPCCTxnManager::is_local_item(uint64_t idx) {
 
 
 RC TPCCTxnManager::send_remote_request() {
-  if (isImitateTxn()) {
-    return RCOK; // 目标节点不需要做该事情
-  }
-  if (sync_exec && wh_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId()) {
-    setRemoteTxn();
-    return RCOK; //  指的是迁移事务被发往目标执行了，因此不需要继续发送远程执行
-  }
   assert(IS_LOCAL(get_txn_id()));
   TPCCQuery* tpcc_query = (TPCCQuery*) query;
   TPCCRemTxnType next_state = TPCC_FIN;
@@ -400,14 +358,10 @@ RC TPCCTxnManager::send_remote_request() {
     assert(false);
   }
   TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
-  printf("事务%ld发出阶段%d的远程执行请求，远程节点:%d\n",get_txn_id(),state, dest_node_id);
   msg->state = state;
-  msg->imitate_txn = false;
   query->partitions_touched.add_unique(GET_PART_ID(0,dest_node_id));
   msg_queue.enqueue(get_thd_id(),msg,dest_node_id);
-  glob_manager.migration_stat.addBlockedTxn(get_txn_id(), true, std::chrono::system_clock::now()); //  myt add:用于分布式事务超时终止
   state = next_state;
-  set_rc(WAIT_REM); // 这个本来打算做判断分布式事务阻塞时判断是否在远程执行，然后终止事务时依据该状态来发送远程终止，但是发现有其他可以用的成员，暂时无用
   return WAIT_REM;
 }
 
@@ -416,28 +370,12 @@ void TPCCTxnManager::copy_remote_items(TPCCQueryMessage * msg) {
   msg->items.init(tpcc_query->items.size());
   if(tpcc_query->txn_type == TPCC_PAYMENT)
     return;
- 
-  //  如果是模仿事务，new_order_0发送也需要这些重做数据
-  if (!isSyncExec() && next_item_id < tpcc_query->items.size()) {
-    uint64_t dest_node_id = GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id));
-    while(next_item_id < tpcc_query->items.size() && !is_local_item(next_item_id) && GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id)) == dest_node_id) {
-      // printf("事务%ld复制item\n",get_txn_id());
-      Item_no * req = (Item_no*) mem_allocator.alloc(sizeof(Item_no));
-      req->copy(tpcc_query->items[next_item_id]);
-      ++next_item_id;
-      msg->items.add(req);
-      // printf("事务%ld  :item的size:%d ,next_item_id为%d\n", get_txn_id(), tpcc_query->items.size(), next_item_id);
-    }
-  } else {
-    size_t idx = 0;
-    while (idx < tpcc_query->items.size()) {
-      Item_no * req = (Item_no*) mem_allocator.alloc(sizeof(Item_no));
-      req->copy(tpcc_query->items[idx]);
-      ++idx;
-      msg->items.add(req);
-    }
+  uint64_t dest_node_id = GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id));
+  while(next_item_id < tpcc_query->items.size() && !is_local_item(next_item_id) && GET_NODE_ID(wh_to_part(tpcc_query->items[next_item_id]->ol_supply_w_id)) == dest_node_id) {
+    Item_no * req = (Item_no*) mem_allocator.alloc(sizeof(Item_no));
+    req->copy(tpcc_query->items[next_item_id++]);
+    msg->items.add(req);
   }
-
 }
 
 
@@ -458,7 +396,7 @@ RC TPCCTxnManager::run_txn_state() {
     uint64_t ol_i_id = 0; // 订单商品id
     uint64_t ol_supply_w_id = 0;  //  订单供应仓库id
     uint64_t ol_quantity = 0; //  订单行数量
-    if(tpcc_query->txn_type == TPCC_NEW_ORDER && next_item_id < tpcc_query->items.size()) {//  新订单，可能涉及购买到多个商品，每个商品涉及到的数据有订单商品id，供应仓库id，数量
+    if(tpcc_query->txn_type == TPCC_NEW_ORDER) {//  新订单，可能涉及购买到多个商品，每个商品涉及到的数据有订单商品id，供应仓库id，数量
         ol_i_id = tpcc_query->items[next_item_id]->ol_i_id;
         ol_supply_w_id = tpcc_query->items[next_item_id]->ol_supply_w_id;
         ol_quantity = tpcc_query->items[next_item_id]->ol_quantity;
@@ -473,21 +411,16 @@ RC TPCCTxnManager::run_txn_state() {
     bool w_loc = GET_NODE_ID(part_id_w) == g_node_id;
     bool c_w_loc = GET_NODE_ID(part_id_c_w) == g_node_id;
     bool ol_supply_w_loc = GET_NODE_ID(part_id_ol_supply_w) == g_node_id;
-    if (tpcc_query->txn_type == TPCC_NEW_ORDER && isRemoteTxn()) {
-      printf("远程执行事务%ld的next_item_id为%ld,当前阶段:%d\n", get_txn_id(), next_item_id, state);
-    }
+
 	RC rc = RCOK;
 
 	switch (state) {
     //  row 为成员变量，下一个state依旧会使用（如run_payment_0获取的row，到run_payment_1才进行修改
 		case TPCC_PAYMENT0 :
-            if(w_loc || isImitateTxn())
+            if(w_loc)
                     rc = run_payment_0(w_id, d_id, d_w_id, h_amount, row);
-            else {  //  目标节点的模仿事务会执行这个分支所以在里面添加了判断
+            else {
               rc = send_remote_request();
-              if (isSyncExec()) {
-                state = TPCC_PAYMENT1;
-              }
             }
             break;
 		case TPCC_PAYMENT1 :
@@ -500,7 +433,7 @@ RC TPCCTxnManager::run_txn_state() {
             rc = run_payment_3(w_id, d_id, d_w_id, h_amount, row);
             break;
 		case TPCC_PAYMENT4 :
-            if(c_w_loc || isImitateTxn())
+            if(c_w_loc)
                 rc = run_payment_4( w_id,  d_id, c_id, c_w_id,  c_d_id, c_last, h_amount, by_last_name, row);
             else {
                 rc = send_remote_request();
@@ -510,13 +443,10 @@ RC TPCCTxnManager::run_txn_state() {
             rc = run_payment_5( w_id,  d_id, c_id, c_w_id,  c_d_id, c_last, h_amount, by_last_name, row);
             break;
 		case TPCC_NEWORDER0 :
-            if(w_loc || isImitateTxn())
+            if(w_loc)
                 rc = new_order_0( w_id, d_id, c_id, remote, ol_cnt, o_entry_d, &tpcc_query->o_id, row);
             else {
                 rc = send_remote_request();
-                if (isSyncExec()) {
-                  state = TPCC_NEWORDER1;
-                }
             }
 			break;
 		case TPCC_NEWORDER1 :
@@ -535,14 +465,10 @@ RC TPCCTxnManager::run_txn_state() {
             rc = new_order_5( w_id, d_id, c_id, remote, ol_cnt, o_entry_d, &tpcc_query->o_id, row);
             break;
 		case TPCC_NEWORDER6 :
-      if (!isSyncExec() || ol_supply_w_loc) {
-        rc = new_order_6(ol_i_id, row);
-      }
+			rc = new_order_6(ol_i_id, row);
 			break;
 		case TPCC_NEWORDER7 :
-			if (!isSyncExec() || ol_supply_w_loc) {
-        rc = new_order_7(ol_i_id, row);
-      }
+			rc = new_order_7(ol_i_id, row);
 			break;
 		case TPCC_NEWORDER8 :
 		      if(ol_supply_w_loc) {
@@ -568,11 +494,28 @@ RC TPCCTxnManager::run_txn_state() {
 
   if(rc == RCOK)
     next_tpcc_state();
-  else if (isRemoteTxn() && rc != RCOK){
-    printf("远程执行事务%ld执行失败\n",get_txn_id());
-  }
   return rc;
 }
+
+/*--------------------------------------------------
+    在存储过程中加入日志代码的范式
+    // 先记录未修改前的行快照
+  #if LOGGING
+    char before_row[MAX_TUPLE_SIZE];
+    memcpy(before_row, r_wh_local->get_data(), r_wh_local->get_tuple_size());
+  #endif
+    // 待行修改后, 记录日志
+  #if LOGGING
+    uint32_t n_cols = 0;
+    uint32_t id_cols[17];
+    id_cols[n_cols++] = W_YTD;
+    char after_row[MAX_TUPLE_SIZE];
+    memcpy(after_row, r_wh_local->get_data(), r_wh_local->get_tuple_size());
+    LogRecord *record = 
+        logger.createRecord(get_txn_id(), L_UPDATE, w_id, n_cols, id_cols, before_row, after_row);
+    logger.enqueueRecord(record);
+  #endif
+-----------------------------------------------*/
 
 //  仓库修改累计金额步骤一：读行后获取行（txn_manager::get_row())
 inline RC TPCCTxnManager::run_payment_0(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t *& r_wh_local) {
@@ -580,7 +523,6 @@ inline RC TPCCTxnManager::run_payment_0(uint64_t w_id, uint64_t d_id, uint64_t d
 	uint64_t key;
 	itemid_t * item;
 /*====================================================+
-//  warehouse为热点行
     	EXEC SQL UPDATE warehouse SET w_ytd = w_ytd + :h_amount
 		WHERE w_id=:w_id;
 	+====================================================*/
@@ -605,7 +547,7 @@ inline RC TPCCTxnManager::run_payment_0(uint64_t w_id, uint64_t d_id, uint64_t d
   return rc;
 }
 
-//  仓库修改累计金额步骤二：执行修改操作 ，即增加仓库金额
+//  仓库修改累计金额步骤二：执行修改操作 
 inline RC TPCCTxnManager::run_payment_1(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t * r_wh_local) {
 
   assert(r_wh_local != NULL);
@@ -620,17 +562,41 @@ inline RC TPCCTxnManager::run_payment_1(uint64_t w_id, uint64_t d_id, uint64_t d
 		WHERE w_id=:w_id;
 	+===================================================================*/
 
-  printf("%执行payment\n");
 	double w_ytd;
 	r_wh_local->get_value(W_YTD, w_ytd);
+  // printf("执行 run_payment_1 操作\n");
+#if LOGGING
+  char before_row[MAX_TUPLE_SIZE];
+  memcpy(before_row, r_wh_local->get_data(), r_wh_local->get_tuple_size());
+#endif
 	if (g_wh_update) {
 		r_wh_local->set_value(W_YTD, w_ytd + h_amount);
+#if LOGGING
+    uint32_t n_cols = 0;
+    uint32_t id_cols[17];
+    id_cols[n_cols++] = W_YTD;
+    char after_row[MAX_TUPLE_SIZE];
+    memcpy(after_row, r_wh_local->get_data(), r_wh_local->get_tuple_size());
+    //LogRecord * record = logger.createRecord(LRT_UPDATE,L_UPDATE,get_txn_id(),part_id,row->get_table()->get_table_id(),row->get_primary_key());
+    LogRecord *record = 
+        logger.createRecord(get_txn_id(), L_UPDATE, w_id, state, wh_to_part(w_id), n_cols, id_cols, before_row, after_row);
+    // if(g_repl_cnt > 0) {
+    //   msg_queue.enqueue(get_thd_id(),
+    //                     Message::create_message(record,LOG_MSG), 
+    //                     g_node_id + g_node_cnt + g_client_node_cnt); 
+    // }
+    bool log_migration = true;
+    if (log_migration) {
+      msg_queue.enqueue(get_thd_id(), Message::create_message(record, LOG_MIGRATION), GET_NODE_ID(1));
+    }
+    logger.enqueueRecord(record);
+#endif
 	}
   return RCOK;
 }
 
 
-//  区域修改累计金额步骤一：读行后获取行（txn_manager::get_row()) ，修改区域金额，先读到该行
+//  区域修改累计金额步骤一：读行后获取行（txn_manager::get_row())
 inline RC TPCCTxnManager::run_payment_2(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t *& r_dist_local) {
 	/*=====================================================+
 		EXEC SQL UPDATE district SET d_ytd = d_ytd + :h_amount
@@ -644,9 +610,10 @@ inline RC TPCCTxnManager::run_payment_2(uint64_t w_id, uint64_t d_id, uint64_t d
 	row_t * r_dist = ((row_t *)item->location);
 	RC rc = get_row(r_dist, WR, r_dist_local);
   return rc;
+
 }
 
-//  区域修改累计金额步骤二：执行修改操作， 读到后修改
+//  区域修改累计金额步骤二：执行修改操作 
 inline RC TPCCTxnManager::run_payment_3(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t * r_dist_local) {
   assert(r_dist_local != NULL);
 
@@ -655,9 +622,23 @@ inline RC TPCCTxnManager::run_payment_3(uint64_t w_id, uint64_t d_id, uint64_t d
 		WHERE d_w_id=:w_id AND d_id=:d_id;
 	+=====================================================*/
 	double d_ytd;
+#if LOGGING
+  char before_row[MAX_TUPLE_SIZE];
+  memcpy(before_row, r_dist_local->get_data(), r_dist_local->get_tuple_size());
+#endif
 	r_dist_local->get_value(D_YTD, d_ytd);
 	r_dist_local->set_value(D_YTD, d_ytd + h_amount);
-
+#if LOGGING
+  uint32_t n_cols = 0;
+  uint32_t id_cols[17];
+  id_cols[n_cols++] = D_YTD;
+  char after_row[MAX_TUPLE_SIZE];
+  uint64_t key = distKey(d_id, d_w_id);
+  memcpy(after_row, r_dist_local->get_data(), r_dist_local->get_tuple_size());
+  LogRecord *record = 
+      logger.createRecord(get_txn_id(), L_UPDATE, key, state, wh_to_part(w_id), n_cols, id_cols, before_row, after_row);
+  logger.enqueueRecord(record);
+#endif
 	return RCOK;
 }
 
@@ -677,7 +658,7 @@ inline RC TPCCTxnManager::run_payment_4(uint64_t w_id, uint64_t d_id,uint64_t c_
 //  第一步，查询数据所在位置(item) ;第二步,通过管理器获取数据行的真正修改位置
 
 //  1.查找条件为客户的c_w_id,c_d_id和c_last（姓氏)
-	if (by_last_name) {
+	if (by_last_name) { 
 		/*==========================================================+
 			EXEC SQL SELECT count(c_id) INTO :namecnt
 			FROM customer
@@ -759,6 +740,11 @@ inline RC TPCCTxnManager::run_payment_5(uint64_t w_id, uint64_t d_id,uint64_t c_
 	double c_ytd_payment;
 	double c_payment_cnt;
 
+#if LOGGING
+  char before_row[MAX_TUPLE_SIZE];
+  memcpy(before_row, r_cust_local->get_data(), r_cust_local->get_tuple_size());
+#endif
+
 	r_cust_local->get_value(C_BALANCE, c_balance);
 	r_cust_local->set_value(C_BALANCE, c_balance - h_amount);
 	r_cust_local->get_value(C_YTD_PAYMENT, c_ytd_payment);
@@ -766,7 +752,19 @@ inline RC TPCCTxnManager::run_payment_5(uint64_t w_id, uint64_t d_id,uint64_t c_
 	r_cust_local->get_value(C_PAYMENT_CNT, c_payment_cnt);
 	r_cust_local->set_value(C_PAYMENT_CNT, c_payment_cnt + 1);
 
-	//char * c_credit = r_cust_local->get_value(C_CREDIT);
+#if LOGGING
+  uint32_t n_cols = 0;
+  uint32_t id_cols[17];
+  id_cols[n_cols++] = C_BALANCE;
+  id_cols[n_cols++] = C_YTD_PAYMENT;
+  id_cols[n_cols++] = C_PAYMENT_CNT;
+  char after_row[MAX_TUPLE_SIZE];
+  uint64_t key = custKey(c_id, c_d_id, c_w_id);   // 计算 key
+  memcpy(after_row, r_cust_local->get_data(), r_cust_local->get_tuple_size());
+  LogRecord *record = 
+      logger.createRecord(get_txn_id(), L_UPDATE, key, state, wh_to_part(c_w_id), n_cols, id_cols, before_row, after_row);
+  logger.enqueueRecord(record);
+#endif
 
 	/*=============================================================================+
 	  EXEC SQL INSERT INTO
@@ -782,10 +780,28 @@ inline RC TPCCTxnManager::run_payment_5(uint64_t w_id, uint64_t d_id,uint64_t c_
 	r_hist->set_value(H_C_W_ID, c_w_id);
 	r_hist->set_value(H_D_ID, d_id);
 	r_hist->set_value(H_W_ID, w_id);
-	int64_t date = 2013;		
+	int64_t date = 2024;
 	r_hist->set_value(H_DATE, date);
 	r_hist->set_value(H_AMOUNT, h_amount);
 	insert_row(r_hist, _wl->t_history);
+
+#if LOGGING
+  n_cols = 0;
+  id_cols[n_cols++] = H_C_ID;
+  id_cols[n_cols++] = H_C_D_ID;
+  id_cols[n_cols++] = H_C_W_ID;
+  id_cols[n_cols++] = H_D_ID;
+  id_cols[n_cols++] = H_W_ID;
+  id_cols[n_cols++] = H_DATE;
+  id_cols[n_cols++] = H_AMOUNT;
+  // char before_row[MAX_TUPLE_SIZE];
+  // char after_row[MAX_TUPLE_SIZE];
+  key = 0;   // 计算 key
+  memcpy(after_row, r_hist->get_data(), r_hist->get_tuple_size());
+  LogRecord *record1 = 
+      logger.createRecord(get_txn_id(), L_INSERT, key, state, wh_to_part(c_w_id), n_cols, id_cols, before_row, after_row);
+  logger.enqueueRecord(record1);
+#endif
 
 	return RCOK;
 }
@@ -793,7 +809,6 @@ inline RC TPCCTxnManager::run_payment_5(uint64_t w_id, uint64_t d_id,uint64_t c_
 
 
 // new_order 0
-// customer和warehouse表，查看客户的信息以及仓库的税率
 inline RC TPCCTxnManager::new_order_0(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t *& r_wh_local) {
 	uint64_t key;
 	itemid_t * item;
@@ -809,21 +824,17 @@ inline RC TPCCTxnManager::new_order_0(uint64_t w_id, uint64_t d_id, uint64_t c_i
 	item = index_read(index, key, wh_to_part(w_id));
 	assert(item != NULL);
 	row_t * r_wh = ((row_t *)item->location);
-  //  RD,读操作
   RC rc = get_row(r_wh, RD, r_wh_local);
-  if (isImitateTxn()) {
-    printf("new_order_0模仿事务%ld执行后状态:%d\n", get_txn_id(),state);
-  }
   return rc;
 }
-// 读仓库税率
+
 inline RC TPCCTxnManager::new_order_1(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t * r_wh_local) {
   assert(r_wh_local != NULL);
 	double w_tax;
 	r_wh_local->get_value(W_TAX, w_tax); 
   return RCOK;
 }
-// 以RD方式获取custom的行
+
 inline RC TPCCTxnManager::new_order_2(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t *& r_cust_local) {
 	uint64_t key;
 	itemid_t * item;
@@ -836,7 +847,6 @@ inline RC TPCCTxnManager::new_order_2(uint64_t w_id, uint64_t d_id, uint64_t c_i
   return rc;
 }
 
-// 读custom行的discount值，客户折扣率
 inline RC TPCCTxnManager::new_order_3(uint64_t w_id, uint64_t d_id, uint64_t c_id, bool remote, uint64_t  ol_cnt,uint64_t  o_entry_d, uint64_t * o_id, row_t * r_cust_local) {
   assert(r_cust_local != NULL);
 	uint64_t c_discount;
@@ -871,9 +881,24 @@ inline RC TPCCTxnManager::new_order_5(uint64_t w_id, uint64_t d_id, uint64_t c_i
 	//double d_tax;
 	//int64_t o_id;
 	//d_tax = *(double *) r_dist_local->get_value(D_TAX);
+#if LOGGING
+  char before_row[MAX_TUPLE_SIZE];
+  memcpy(before_row, r_dist_local->get_data(), r_dist_local->get_tuple_size());
+#endif
 	*o_id = *(int64_t *) r_dist_local->get_value(D_NEXT_O_ID);
 	(*o_id) ++;
 	r_dist_local->set_value(D_NEXT_O_ID, *o_id);
+#if LOGGING
+  uint32_t n_cols = 0;
+  uint32_t id_cols[17];
+  id_cols[n_cols++] = D_NEXT_O_ID;
+  char after_row[MAX_TUPLE_SIZE];
+  uint64_t key = distKey(d_id, w_id);   // 计算 key
+  memcpy(after_row, r_dist_local->get_data(), r_dist_local->get_tuple_size());
+  LogRecord *record = 
+      logger.createRecord(get_txn_id(), L_UPDATE, key, state, wh_to_part(w_id), n_cols, id_cols, before_row, after_row);
+  logger.enqueueRecord(record);
+#endif
 
 	// return o_id
 	/*========================================================================================+
@@ -892,6 +917,23 @@ inline RC TPCCTxnManager::new_order_5(uint64_t w_id, uint64_t d_id, uint64_t c_i
 	int64_t all_local = (remote? 0 : 1);
 	r_order->set_value(O_ALL_LOCAL, all_local);
 	insert_row(r_order, _wl->t_order);
+#if LOGGING
+  n_cols = 0;
+  id_cols[n_cols++] = O_ID;
+  id_cols[n_cols++] = O_C_ID;
+  id_cols[n_cols++] = O_D_ID;
+  id_cols[n_cols++] = O_W_ID;
+  id_cols[n_cols++] = O_ENTRY_D;
+  id_cols[n_cols++] = O_OL_CNT;
+  id_cols[n_cols++] = O_ALL_LOCAL;
+  // char before_row[MAX_TUPLE_SIZE];
+  // char after_row[MAX_TUPLE_SIZE];
+  key = 0;   // 计算 key
+  memcpy(after_row, r_order->get_data(), r_order->get_tuple_size());
+  LogRecord *record1 = 
+      logger.createRecord(get_txn_id(), L_INSERT, key, state, wh_to_part(w_id), n_cols, id_cols, before_row, after_row);
+  logger.enqueueRecord(record1);
+#endif
 	/*=======================================================+
     EXEC SQL INSERT INTO NEW_ORDER (no_o_id, no_d_id, no_w_id)
         VALUES (:o_id, :d_id, :w_id);
@@ -902,6 +944,19 @@ inline RC TPCCTxnManager::new_order_5(uint64_t w_id, uint64_t d_id, uint64_t c_i
 	r_no->set_value(NO_D_ID, d_id);
 	r_no->set_value(NO_W_ID, w_id);
 	insert_row(r_no, _wl->t_neworder);
+#if LOGGING
+  n_cols = 0;
+  id_cols[n_cols++] = NO_O_ID;
+  id_cols[n_cols++] = NO_D_ID;
+  id_cols[n_cols++] = NO_W_ID;
+  // char before_row[MAX_TUPLE_SIZE];
+  // char after_row[MAX_TUPLE_SIZE];
+  key = 0;   // 计算 key
+  memcpy(after_row, r_no->get_data(), r_no->get_tuple_size());
+  LogRecord *record2 = 
+      logger.createRecord(get_txn_id(), L_INSERT, key, state, wh_to_part(w_id), n_cols, id_cols, before_row, after_row);
+  logger.enqueueRecord(record2);
+#endif
 
 	return RCOK;
 }
@@ -967,18 +1022,23 @@ inline RC TPCCTxnManager::new_order_8(uint64_t w_id,uint64_t  d_id,bool remote, 
 		assert(item != NULL);
 		row_t * r_stock = ((row_t *)item->location);
     RC rc = get_row(r_stock, WR, r_stock_local);
-    if (isRemoteTxn() && rc != RCOK) {
-      printf("远程执行事务%ld的new_order8:getrow失败,状态为:%d\n",get_txn_id(),rc);
-    } 
     return rc;
 }
 		
 inline RC TPCCTxnManager::new_order_9(uint64_t w_id,uint64_t  d_id,bool remote, uint64_t ol_i_id, uint64_t ol_supply_w_id, uint64_t ol_quantity,uint64_t  ol_number, uint64_t ol_amount, uint64_t  o_id, row_t * r_stock_local) {
-  // assert(r_stock_local != NULL);
+  assert(r_stock_local != NULL);
 		// XXX s_dist_xx are not retrieved.
 		UInt64 s_quantity;
 		int64_t s_remote_cnt;
 		s_quantity = *(int64_t *)r_stock_local->get_value(S_QUANTITY);
+
+#if LOGGING
+  char before_row[MAX_TUPLE_SIZE];
+  memcpy(before_row, r_stock_local->get_data(), r_stock_local->get_tuple_size());
+  uint32_t n_cols = 0;
+  uint32_t id_cols[17];
+#endif
+
 #if !TPCC_SMALL
 		int64_t s_ytd;
 		int64_t s_order_cnt;
@@ -989,11 +1049,19 @@ inline RC TPCCTxnManager::new_order_9(uint64_t w_id,uint64_t  d_id,bool remote, 
 		r_stock_local->get_value(S_ORDER_CNT, s_order_cnt);
 		r_stock_local->set_value(S_ORDER_CNT, s_order_cnt + 1);
 		s_data = r_stock_local->get_value(S_DATA);
+  #if LOGGING
+    id_cols[n_cols++] = S_YTD;
+    id_cols[n_cols++] = S_ORDER_CNT;
+  #endif
 #endif
+
 		if (remote) {
 			s_remote_cnt = *(int64_t*)r_stock_local->get_value(S_REMOTE_CNT);
 			s_remote_cnt ++;
 			r_stock_local->set_value(S_REMOTE_CNT, &s_remote_cnt);
+#if LOGGING
+      id_cols[n_cols++] = S_REMOTE_CNT;
+#endif
 		}
 		uint64_t quantity;
 		if (s_quantity > ol_quantity + 10) {
@@ -1002,7 +1070,16 @@ inline RC TPCCTxnManager::new_order_9(uint64_t w_id,uint64_t  d_id,bool remote, 
 			quantity = s_quantity - ol_quantity + 91;
 		}
 		r_stock_local->set_value(S_QUANTITY, &quantity);
+#if LOGGING
+    id_cols[n_cols++] = S_QUANTITY;
 
+    char after_row[MAX_TUPLE_SIZE];
+    uint64_t key = stockKey(ol_i_id, ol_supply_w_id);   // 计算 key
+    memcpy(after_row, r_stock_local->get_data(), r_stock_local->get_tuple_size());
+    LogRecord *record = 
+        logger.createRecord(get_txn_id(), L_UPDATE, key, state, wh_to_part(ol_supply_w_id), n_cols, id_cols, before_row, after_row);
+    logger.enqueueRecord(record);
+#endif
 		/*====================================================+
 		EXEC SQL INSERT
 			INTO order_line(ol_o_id, ol_d_id, ol_w_id, ol_number,
@@ -1222,9 +1299,3 @@ RC TPCCTxnManager::run_tpcc_phase5() {
   return rc;
 
 }
-
-
-
-
-
-

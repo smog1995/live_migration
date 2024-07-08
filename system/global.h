@@ -155,7 +155,6 @@ extern UInt32 g_abort_thread_cnt;
 extern UInt32 g_logger_thread_cnt;
 extern UInt32 g_send_thread_cnt;
 extern UInt32 g_rem_thread_cnt;
-extern UInt32 g_ld_thread_cnt;
 extern ts_t g_abort_penalty; 
 extern ts_t g_abort_penalty_max; 
 extern bool g_central_man;
@@ -238,14 +237,7 @@ extern UInt32 g_seq_thread_cnt;
 extern UInt32 g_repl_type;
 extern UInt32 g_repl_cnt;
 
-//live_migration
-
-extern int migra_part_id;
-extern UInt64 migra_node_id;
-extern bool route_exchange;
-
 enum RC { RCOK=0, Commit, Abort, WAIT, WAIT_REM, ERROR, FINISH, NONE };
-enum migration_stage { SNAPSHOT_TRANS = 0, ASYNC_LOGS, SYNC_EXEC};
 enum RemReqType {INIT_DONE=0,
     RLK,
     RULK,
@@ -277,7 +269,7 @@ enum RemReqType {INIT_DONE=0,
     SNAPSHOT_ACK,
     MIGRATION_MSG,
     MIGRATION_ACK,
-    RTXN_ABORT
+    LOG_MIGRATION
     };
 
 // Calvin
@@ -352,5 +344,9 @@ enum TsType {R_REQ = 0, W_REQ, P_REQ, XP_REQ};
 #ifndef UINT64_MAX
 #define UINT64_MAX 		18446744073709551615UL
 #endif // UINT64_MAX
+
+#ifndef UINT32_MAX
+#define UINT32_MAX      4294967295
+#endif // UINT32_MAX
 
 #endif
