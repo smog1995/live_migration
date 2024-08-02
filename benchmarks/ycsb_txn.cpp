@@ -97,6 +97,7 @@ RC YCSBTxnManager::send_migration_txn() {
   printf("发送事务%ld的同步迁移事务，事务类型:%d,destid为:%d\n",get_txn_id(),msg->state, dest_id);
   msg_queue.enqueue(get_thd_id(),msg, dest_id);
   ATOM_ADD(glob_manager.migration_stat.imitate_txn, 1);
+  return RCOK;
 }
 
 RC YCSBTxnManager::run_txn() {

@@ -145,7 +145,7 @@ RC run_txn_state();
   bool is_done();
   bool is_local_item(uint64_t idx);
   RC send_remote_request(); 
-
+  RC send_migration_txn();
 	RC run_payment_0(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t *& r_wh_local);
 	RC run_payment_1(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t * r_wh_local);
 	RC run_payment_2(uint64_t w_id, uint64_t d_id, uint64_t d_w_id, double h_amount, row_t *& r_dist_local);

@@ -57,7 +57,17 @@ RC TPCCTxnManager::run_txn_post_wait() {
     return RCOK;
 }
 
-
+RC TPCCTxnManager::send_migration_txn() {
+  query->partitions_touched.add_unique(glob_manager.getDestId());
+  TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
+  msg->imitate_txn = true;
+  msg->state = ((TPCCQuery*)query)->txn_type == TPCC_NEW_ORDER ? TPCC_NEWORDER0 : TPCC_PAYMENT0;
+  uint64_t dest_id = glob_manager.getDestId();
+  printf("发送事务%ld的同步迁移事务，事务类型:%d,destid为:%d\n",get_txn_id(),msg->state, dest_id);
+  msg_queue.enqueue(get_thd_id(),msg, dest_id);
+  ATOM_ADD(glob_manager.migration_stat.imitate_txn, 1);
+  return RCOK;
+}
 RC TPCCTxnManager::run_txn() {
 #if MODE == SETUP_MODE
   return RCOK;
@@ -83,15 +93,9 @@ RC TPCCTxnManager::run_txn() {
   while(rc == RCOK && !is_done()) {
     if (glob_manager.getSyncFlag() && !sync_exec && wh_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId() && !isRemoteTxn() && !isImitateTxn()) {
       //  开启活跃事务迁移
+      send_migration_txn();
       sync_exec = true;
-      query->partitions_touched.add_unique(glob_manager.getDestId());
-      TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
-      msg->imitate_txn = true;
-      msg->state = ((TPCCQuery*)query)->txn_type == TPCC_NEW_ORDER ? TPCC_NEWORDER0 : TPCC_PAYMENT0;
-      uint64_t dest_id = glob_manager.getDestId();
-      printf("发送事务%ld的同步迁移事务，事务类型:%d,destid为:%d\n",get_txn_id(),msg->state, dest_id);
-      msg_queue.enqueue(get_thd_id(),msg, dest_id);
-      ATOM_ADD(glob_manager.migration_stat.imitate_txn, 1);
+      
     }
     if (sync_exec_rtn_abort) {
       rc = Abort;

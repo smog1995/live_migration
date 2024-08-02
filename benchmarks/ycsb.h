@@ -76,7 +76,7 @@ private:
   bool is_done() ;
   bool is_local_request(uint64_t idx) ;
   RC send_remote_request() ;
-
+  RC send_migration_txn();
   row_t * row;
 	YCSBWorkload * _wl;
 	YCSBRemTxnType state;
