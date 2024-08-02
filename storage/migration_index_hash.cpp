@@ -77,7 +77,6 @@ MigrationIndexHash::release_latch(MigrationBucketHeader * bucket) {
 	assert(ok);
 }
 
-	//  part_id作为接口实现类，并不起作用
 RC MigrationIndexHash::index_insert(idx_key_t key, itemid_t * item, int part_id) {
 	RC rc = RCOK;
 	uint64_t bkt_idx = hash(key);

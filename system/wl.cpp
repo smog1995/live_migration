@@ -97,17 +97,17 @@ RC Workload::init_schema(const char * schema_file) {
 
       uint64_t table_size = g_synth_table_size;
 #if WORKLOAD == TPCC
-      // 表的数量（指表的分区数量）
+      // 每个分表的行总数
       if ( !tname.compare(1, 9, "WAREHOUSE") ) {
         tname_len = 9;
-        table_size = g_num_wh / g_part_cnt;
+        table_size = g_num_wh / g_part_cnt;    wh有10个,g_part_cnt若为5（5分区）,则每个分表有2个
         printf("WAREHOUSE size %ld\n",table_size);
       } else if ( !tname.compare(1, 8, "DISTRICT") ) {
         tname_len = 8;
         table_size = g_num_wh / g_part_cnt * g_dist_per_wh;
         printf("DISTRICT size %ld\n",table_size);
       } else if ( !tname.compare(1, 8, "CUSTOMER") ) {
-        tname_len = 8;
+        tname_len = 8; 
         table_size = g_num_wh / g_part_cnt * g_dist_per_wh * g_cust_per_dist;
         printf("CUSTOMER size %ld\n",table_size);
       } else if ( !tname.compare(1, 7, "HISTORY") ) {
@@ -150,8 +150,7 @@ RC Workload::init_schema(const char * schema_file) {
       }
 #else
 	  tname_len = 10;
-    //   table_size = g_synth_table_size / g_part_cnt;  //原先的设置，因为migration_index被我改了所以这得改
-		table_size = g_synth_table_size;
+      table_size = g_synth_table_size / g_part_cnt;
 #endif
 #if INDEX_STRUCT == IDX_HASH
 			index->init(1024, tables[tname.substr(1,tname_len)], table_size);
