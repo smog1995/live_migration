@@ -53,6 +53,7 @@ void MigrationThread::change_stage() {
         live_migration_stage = ASYNC_LOGS;
         start_time = receive_time;
         printf("进入二阶段，异步日志传输\n");
+
       }
       break;
     case ASYNC_LOGS :
@@ -68,7 +69,9 @@ void MigrationThread::change_stage() {
       stage_time_cost[live_migration_stage] = std::chrono::duration<double, std::milli>(receive_time - start_time);
       printf("同步执行阶段用时:%lf (ms)\n",stage_time_cost[live_migration_stage].count());
       start_time = receive_time;
-      printf("finish\n");
+      
+      
+
       break;
     default :
       assert(false);
@@ -112,6 +115,28 @@ RC MigrationThread::run() {
       memcpy(snap_msg->table_index_name, table_indexs_name[cur_table_index].c_str(), table_indexs_name[cur_table_index].size());
       msg_queue.enqueue(get_thd_id(), snap_msg, 0);
       printf("开始传输表index%s\n",table_indexs_name[cur_table_index].c_str());
+    } else if (live_migration_stage == ASYNC_LOGS) {
+      start_time = std::chrono::system_clock::now();
+      //  目前这里还没实现，我们要测试同步阶段，先实现同步阶段
+      LiveMigrationMessage* sync_msg = (LiveMigrationMessage*)Message::create_message(MIGRATION_MSG);
+      sync_msg->migration_dest_id = 1;
+      sync_msg->part_id = 0;
+      sync_msg->finish = false;
+      sync_msg->live_migration_stage = ASYNC_LOGS;
+      msg_queue.enqueue(get_thd_id(), sync_msg, 0);
+      
+      //先在这里进行切换路由，后面再改
+      usleep(1000000);
+      route_exchange = true;
+      migra_part_id = 0;
+      migra_node_id = 1;
+      LiveMigrationMessage *sync_finish_msg = (LiveMigrationMessage*)Message::create_message(MIGRATION_MSG);
+      sync_finish_msg->migration_dest_id = 1;
+      sync_finish_msg->part_id = 0;
+      sync_finish_msg->finish = true;
+      sync_finish_msg->live_migration_stage = ASYNC_LOGS;
+      printf("同步阶段完成，切换路由导向，新事务往目标节点执行finish\n");
+      msg_queue.enqueue(get_thd_id(), sync_finish_msg, 0);
     }
   }
 

@@ -57,6 +57,7 @@ RC YCSBWorkload::init() {
   printf("Done\n");
   fflush(stdout);
 //	init_table();
+	// indexes["MAIN_INDEX"]->print_index_structure();
 	return RCOK;
 }
 

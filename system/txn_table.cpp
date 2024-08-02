@@ -162,11 +162,13 @@ void TxnTable::restart_txn(uint64_t thd_id, uint64_t txn_id,uint64_t batch_id) {
   while (t_node != NULL) {
     if(is_matching_txn_node(t_node,txn_id,batch_id)) {
 #if CC_ALG == CALVIN
-      // if (t_node->txn_man->get_rc() == Abort) {
-      //   printf("唤醒的事务%ld为abort事务,跳过\n",t_node->txn_man->get_txn_id());
-      // }
+      
       work_queue.enqueue(thd_id,Message::create_message(t_node->txn_man,RTXN),false);
 #else
+      if (t_node->txn_man->get_rc() == Abort) {
+        printf("唤醒的事务%ld为abort事务,跳过\n",t_node->txn_man->get_txn_id());
+        return ;
+      }
       if(IS_LOCAL(txn_id))
         work_queue.enqueue(thd_id,Message::create_message(t_node->txn_man,RTXN_CONT),false);
       else
@@ -192,14 +194,10 @@ void TxnTable::restart_txn_abort(uint64_t thd_id, uint64_t txn_id) {
     if (is_matching_txn_node(t_node, txn_id, 0)) {
 #if CC_ALG == MVCC2PL
         TxnManager* txn = t_node->txn_man;
-        if (txn->get_rc() != WAIT && txn->get_rc() != WAIT_REM) {
-          printf("该事务%ld不为WAIT或WAITREM状态,不创建，状态为:%d\n", txn_id,txn->get_rc());
-          ATOM_CAS(pool[pool_id]->modify,true,false);
-          return ;
-        }
         printf("txn_table创建事务%ld的abort消息\n",txn_id);
                 
         work_queue.enqueue(thd_id, Message::create_message(t_node->txn_man, RTXN_ABORT), false);
+        // txn->start_abort();
         if (t_node->txn_man->is_multi_part()) {
           auto partitions_touched = t_node->txn_man->query->partitions_touched;
           for (size_t i = 0; i < partitions_touched.size(); i++) {
@@ -208,8 +206,8 @@ void TxnTable::restart_txn_abort(uint64_t thd_id, uint64_t txn_id) {
               }
               printf("发送给在节点%d上远程执行的子事务进行终止\n",partitions_touched[i]);
               msg_queue.enqueue(thd_id, Message::create_message(t_node->txn_man, RTXN_ABORT), partitions_touched[i]);
-          } 
-        } 
+          }
+        }
 #endif
       break;
     }

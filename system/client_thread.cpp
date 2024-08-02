@@ -101,6 +101,12 @@ RC ClientThread::run() {
 
     Message * msg = Message::create_message((BaseQuery*)m_query,CL_QRY);
     ((ClientQueryMessage*)msg)->client_startts = get_sys_clock();
+#if WORKLOAD == TPCC 
+    TPCCQuery* tpcc_query = (TPCCQuery*)m_query; //  路由切换后，继而将迁移分区的事务导向目标节点
+    if (tpcc_query->w_id - 1 == migra_part_id && route_exchange) {
+      next_node_id = migra_node_id;
+    }
+#endif
     msg_queue.enqueue(get_thd_id(),msg,next_node_id);
 		num_txns_sent++;
 		txns_sent[next_node]++;

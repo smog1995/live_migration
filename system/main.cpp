@@ -105,6 +105,7 @@ int main(int argc, char* argv[])
 			assert(false);
 	}
 	m_wl->init();
+  m_wl->printTable("MAIN_INDEX");
 	printf("Workload initialized!\n");
   fflush(stdout);
 #if NETWORK_TEST
@@ -117,8 +118,7 @@ int main(int argc, char* argv[])
 
 	return 0;
 #endif
-
-
+  
   printf("Initializing work queue... ");
   fflush(stdout);
   work_queue.init();
@@ -154,6 +154,7 @@ int main(int argc, char* argv[])
   printf("Initializing query pool... ");
   fflush(stdout);
   qry_pool.init(m_wl,0);
+  
   printf("Done\n");
   printf("Initializing msg pool... ");
   fflush(stdout);
@@ -193,7 +194,7 @@ int main(int argc, char* argv[])
   printf("Done\n");
   fflush(stdout);
 #endif
-
+  
 	// 2. spawn multiple threads
 	uint64_t thd_cnt = g_thread_cnt;
 	uint64_t wthd_cnt = thd_cnt;
@@ -328,6 +329,7 @@ int main(int argc, char* argv[])
   printf("PASS! SimTime = %f\n", (float)(endtime - starttime) / BILLION);
   if (STATS_ENABLE)
     stats.print(false);
+  glob_manager.migration_stat.printStats();
   //malloc_stats_print(NULL, NULL, NULL);
   printf("\n");
   fflush(stdout);

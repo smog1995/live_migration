@@ -238,6 +238,12 @@ extern UInt32 g_seq_thread_cnt;
 extern UInt32 g_repl_type;
 extern UInt32 g_repl_cnt;
 
+//live_migration
+
+extern int migra_part_id;
+extern UInt64 migra_node_id;
+extern bool route_exchange;
+
 enum RC { RCOK=0, Commit, Abort, WAIT, WAIT_REM, ERROR, FINISH, NONE };
 enum migration_stage { SNAPSHOT_TRANS = 0, ASYNC_LOGS, SYNC_EXEC};
 enum RemReqType {INIT_DONE=0,

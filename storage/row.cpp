@@ -311,7 +311,7 @@ RC row_t::get_row(access_t type, TxnManager * txn, row_t *& row) {
 	goto end;
 #elif CC_ALG == MVCC2PL
 	rc = this->manager->access(type, txn, row); // 为写锁时加锁，加锁失败则返回
-	if (rc == WAIT) {
+	if (rc == WAIT || rc == Abort) {
 		goto end;
 	}
 
@@ -352,7 +352,7 @@ RC row_t::get_row_post_wait(access_t type, TxnManager * txn, row_t *& row) {
 	}
 #elif CC_ALG == MVCC2PL
 	rc = manager->access(type, txn, row); // 写版本会初始化该行的所有信息
-	assert(rc == RCOK); //  我们的设计中，只会唤醒不冲突,能加锁成功的事务
+	// assert(rc == RCOK); //  我们的设计中，只会唤醒不冲突,能加锁成功的事务
 
 	
 #endif

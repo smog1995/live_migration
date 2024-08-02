@@ -26,8 +26,7 @@ class  MessageQueue;
 
 void Manager::init() {
 	timestamp = 1;
-	limit_block_overtime = std::chrono::seconds(1);
-	cout << "duration为一秒" << limit_block_overtime.count() << endl;
+	
 	last_min_ts_time = 0;
 	min_ts = 0; 
 	all_ts = (ts_t *) malloc(sizeof(ts_t) * (g_thread_cnt * g_node_cnt));
@@ -47,6 +46,9 @@ void Manager::init() {
 			local_partitions.push_back(i);
 		}
 	}
+	sync_exec = false;
+	partition_id = -1;
+	migration_dest_id = -1;
 }
 
 uint64_t 
@@ -115,7 +117,7 @@ void Manager::release_row(row_t * row) {
 }
 
 
-RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key, string table_name) {
+RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key, string table_name, bool migration_part) {
 	RC rc = RCOK;
 	txnid_t txn_id = txn_man->get_txn_id();
 	while (!ATOM_CAS(row_lock_map_latch_[table_name], false, true)) {}
@@ -123,12 +125,21 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 	if (row_lock_map_[table_name].find(row_key) == row_lock_map_[table_name].end()) {
 		row_lock_map_[table_name].insert(std::make_pair(row_key,std::make_shared<LockRequestQueue>()));
 	}
-	auto lock_request_queue = row_lock_map_[table_name].at(row_key); //使用[row_key]出现访问到空指针，神奇的bug 
+	auto lock_request_queue = row_lock_map_[table_name].at(row_key);
 	ATOM_CAS(row_lock_map_latch_[table_name], true, false);
 	// 再访问行锁等待队列
 	assert(lock_request_queue != NULL);
 	while (!ATOM_CAS(lock_request_queue->latch_, false, true)) {}
-	
+	if (txn_man->isImitateTxn() && migration_part && lock_type == RD) {
+		// 模仿事务加锁失败则中止
+		if (lock_request_queue->granted_count_ != 0) {
+			printf("模仿事务%ld加锁时发现表%s的%ld已上锁，终止,migration_part为%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key,migration_part);
+			ATOM_CAS(lock_request_queue->latch_, true, false);
+			return Abort;
+		}
+		// auto first_request = lock_request_queue->request_queue_.begin();
+		// if ((*first_request)->grant_ )
+	}
 	for (auto ele = lock_request_queue->request_queue_.begin(); ele != lock_request_queue->request_queue_.end(); ele++) {
 		// 1.当前面已经有请求时，如果不是当前事务发出的锁，而且不兼容，我们把锁请求加入等待队列后，阻塞当前事务
 		if ((*ele)->txn_id_ != txn_id && !Compatibale((*ele)->lock_type_, lock_type)) {
@@ -173,10 +184,10 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 	
 	if (rc == RCOK) {  //  
 		lock_request->grant_ = true;
-		// printf("事务%ld对表%s的row%ld加锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
+		printf("事务%ld对表%s的row%ld加锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
 		lock_request_queue->granted_count_++;
 	} else {
-		// printf("事务%ld对表%s的row%ld加锁但失败,需要等待锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
+		printf("事务%ld对表%s的row%ld加锁但失败,需要等待锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
 	}
 	lock_request_queue->request_queue_.push_back(std::unique_ptr<LockRequest>(lock_request));
 	ATOM_CAS(lock_request_queue->latch_, true, false);
@@ -189,7 +200,7 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 //  同时，一个事务对一个行只可能有一个锁
 //  非严格两阶段锁（事务未结束即可释放锁）
 RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_name) {
-	// printf("事务%ld尝试对table(%s)的row%ld解锁\n",txn_man->get_txn_id(),table_name.c_str(), row_key);
+	printf("事务%ld尝试对table(%s)的row%ld解锁\n",txn_man->get_txn_id(),table_name.c_str(), row_key);
 	RC rc = RCOK;
 	txnid_t txn_id = txn_man->get_txn_id();
 	while (!ATOM_CAS(row_lock_map_latch_[table_name], false, true)) {}
@@ -205,13 +216,13 @@ RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_na
 		if ((*ele)->txn_id_ == txn_id) {
 			if ((*ele)->grant_ == true) {
 				lock_request_queue->granted_count_--;
-				// printf("事务%ld对table%s的row%ld解锁成功,此时请求队列剩余锁授予数量:%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key, lock_request_queue->granted_count_);
+				printf("事务%ld对table%s的row%ld解锁成功,此时请求队列剩余锁授予数量:%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key, lock_request_queue->granted_count_);
 				txn_lock_type = (*ele)->lock_type_;
 				lock_request_queue->request_queue_.erase(ele);
 				
 				first_unlock = true;
 			} else {// 阻塞事务的终止
-				// printf("阻塞事务%ld的未授权锁请求移除row%ld\n",txn_man->get_txn_id(),row_key);
+				printf("阻塞事务%ld的未授权锁请求移除row%ld\n",txn_man->get_txn_id(),row_key);
 				lock_request_queue->request_queue_.erase(ele);
 			}
 			break;
@@ -231,7 +242,7 @@ RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_na
 					txn_table.restart_txn(txn_man->get_thd_id(), ele->txn_id_, 0);
 					// 或者遇到的第一个锁仍是写锁，那么只授予一个写锁然后break
 				} else if (ele->lock_type_ == LOCK_EX && is_first_request) {
-					// printf("唤醒写事务%ld ",ele->txn_id_);
+					printf("唤醒写事务%ld ",ele->txn_id_);
 					txn_table.restart_txn(txn_man->get_thd_id(), ele->txn_id_, 0);
 					break;
 				}
@@ -243,9 +254,9 @@ RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_na
 			// printf("唤醒写事务%ld ",(*first_request)->txn_id_);
 			txn_table.restart_txn(txn_man->get_thd_id(), (*first_request)->txn_id_, 0);
 		}
-		// printf("唤醒结束\n");
+		printf("唤醒结束\n");
 	} else {
-		// printf("无需唤醒,此时请求队列中的数量:%ld\n",lock_request_queue->request_queue_.size());
+		printf("无需唤醒,此时请求队列中的数量:%ld\n",lock_request_queue->request_queue_.size());
 		// lockRequestDump(row_key, table_name);
 	}
 	ATOM_CAS(lock_request_queue->latch_, true ,false);
@@ -363,54 +374,3 @@ void LockManager::lockRequestDump(uint64_t rowkey, string table_name) {
 }
 
 
-void Manager::addBlockedTxn(txnid_t txn_id, bool remote_txn, std::chrono::system_clock::time_point start_block_time) {
-	while (!ATOM_CAS(blocked_txns_map_latch, false, true)) {}
-	if (blocked_txns.find(txn_id) == blocked_txns.end()) {
-		blocked_txns.insert({txn_id, unique_ptr<TxnEntry>(new TxnEntry(txn_id, remote_txn,start_block_time))});
-	} else {
-		blocked_txns[txn_id]->start_block_time_ = start_block_time;
-	}
-
-	while (!ATOM_CAS(blocked_txns_map_latch, true, false)) {}
-}
-void Manager::setUnblockedTxn(txnid_t txn_id) {
-	while (!ATOM_CAS(blocked_txns_map_latch, false, true)) {}
-	if (blocked_txns.find(txn_id) != blocked_txns.end()) {
-		blocked_txns[txn_id]->blocked = false;
-	}
-	while (!ATOM_CAS(blocked_txns_map_latch, true, false)) {}
-}
-void Manager::removeTxn(txnid_t txn_id) {
-	while (!ATOM_CAS(blocked_txns_map_latch, false, true)) {}
-	if (blocked_txns.find(txn_id) != blocked_txns.end()) {
-		blocked_txns.erase(txn_id);
-	}
-	while (!ATOM_CAS(blocked_txns_map_latch, true, false)) {}
-}
-
-void Manager::calculateBlockTime(uint64_t thd_id) {
-	while (!ATOM_CAS(blocked_txns_map_latch, false, true)) {}
-	// auto cur_time = 
-	std::chrono::system_clock::time_point cur_time = std::chrono::system_clock::now();
-	int block_overtime_txn_cnt = 0;
-	vector<txnid_t> overtime_txns;
-	for (auto &[txn_id, txn_entry] : blocked_txns) {
-		if (txn_entry->blocked) {
-			txn_entry->blocked_time_ = std::chrono::duration_cast<std::chrono::duration<double>>(cur_time - txn_entry->start_block_time_);
-			if (txn_entry->blocked_time_ > limit_block_overtime) {
-				++block_overtime_txn_cnt;
-				overtime_txns.push_back(txn_id);
-			}
-		}
-	}
-	for (auto txnid : overtime_txns) {
-		blocked_txns.erase(txnid);
-	}
-	while (!ATOM_CAS(blocked_txns_map_latch, true, false)) {}
-	abortOvertimeTxn(thd_id, overtime_txns);
-}
-void Manager::abortOvertimeTxn(uint64_t thd_id, vector<txnid_t> &overtime_txns) {
-	for (size_t i = 0; i < overtime_txns.size(); i++) {
-		txn_table.restart_txn_abort(thd_id, overtime_txns[i]);
-	}
-}

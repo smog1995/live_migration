@@ -8,7 +8,7 @@ RC DeadLockDetectThread::run() {
         if (i == 0) {
             glob_manager.lock_manager.deathLockDetection(get_thd_id());
         } else {
-            glob_manager.calculateBlockTime(get_thd_id());
+            glob_manager.migration_stat.calculateBlockTime(get_thd_id());
         }
         
         

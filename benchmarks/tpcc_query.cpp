@@ -146,6 +146,8 @@ bool TPCCQuery::readonly() {
   return false;
 }
 
+
+
 BaseQuery * TPCCQueryGenerator::gen_payment(uint64_t home_partition) {
   TPCCQuery * query = new TPCCQuery;
 	set<uint64_t> partitions_accessed;

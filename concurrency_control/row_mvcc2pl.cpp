@@ -10,6 +10,7 @@ void MVCCRow::init(row_t* row) {
 }
 
 RC MVCCRow::writeVersion(TxnManager* txn_man) {
+    while (!ATOM_CAS(latch_, false, true)) {}
     // cout <<"事务" << txn_man->get_txn_id()<< "插入版本" << endl;
     // printf("事务%ld插入写版本row_key:%ld\n",txn_man->get_txn_id(), origin_row_->get_primary_key());
     MVCCTransNode* new_node = (MVCCTransNode *) mem_allocator.alloc(sizeof(MVCCTransNode));
@@ -17,7 +18,11 @@ RC MVCCRow::writeVersion(TxnManager* txn_man) {
     
     table_t* table = origin_row_->get_table();
     new_row->init(table, origin_row_->get_part_id(), origin_row_->get_row_id());
-    new_row->copy(txn_man->cur_row);
+    if (txn_man->cur_row->get_schema() == new_row->get_schema()) {
+        new_row->copy(txn_man->cur_row);
+    } else {
+        new_row->copy(origin_row_);
+    }
     // new_row->set_primary_key(txn_man->cur_row->get_primary_key());
     // // table->get_new_row(new_row, row->get_part_id(), 0);
     // new_row->tuple_size = txn_man->last_row->get_tuple_size(); // new_row没有初始化表，成员tuple_size需要单独设置下
@@ -43,6 +48,7 @@ RC MVCCRow::writeVersion(TxnManager* txn_man) {
     if (list_length_ >= HIS_RECYCLE_LEN) {
         gabbageCollection(txn_man);
     }
+    while (!ATOM_CAS(latch_, true, false)) {}
     return RCOK;
 }
 void MVCCRow::dump() {
@@ -109,14 +115,18 @@ RC MVCCRow::readVersion(TxnManager* txn_man, bool snapshot_read) {
 }
 RC MVCCRow::access(access_t type, TxnManager* txn_man, row_t* & row) {
     RC rc = RCOK;
-    if (type == WR) {
+    if (type == WR || (type == RD && txn_man->isImitateTxn())) {
         string table_name = origin_row_->get_table_name();
         // printf("access函数:事务%ld尝试对%s的row%ld加锁\n",txn_man->get_txn_id(), table_name.c_str(),origin_row_->get_primary_key());
-        rc = glob_manager.lock_manager.lockRow(txn_man, LOCK_EX, origin_row_->get_primary_key(), table_name);
+        bool migration_partition = origin_row_->get_part_id() == glob_manager.getPartId();
+        rc = glob_manager.lock_manager.lockRow(txn_man, LOCK_EX, origin_row_->get_primary_key(), table_name, migration_partition);
         // manager.add
+        if (rc == WAIT) {
+            printf("事务%ld对%ld需要等待锁\n",txn_man->get_txn_id(), origin_row_->get_primary_key());
+        }
     }
     //  再次唤醒直接返回
-    if (rc == WAIT) {
+    if (rc == WAIT || rc == Abort) {
         return rc;
     }
     readVersion(txn_man); //  会获取一个能读到的版本放入txn_man->cur_row 
@@ -129,6 +139,7 @@ RC MVCCRow::access(access_t type, TxnManager* txn_man, row_t* & row) {
 
 RC MVCCRow::rollbackVersion(TxnManager* txn_man) {
     cout << "回滚版本 "; 
+    while (!ATOM_CAS(latch_, false, true)) {}
     MVCCTransNode* cur_node = list_head_;
     MVCCTransNode* pre_node = NULL;
     while (cur_node) {
@@ -138,9 +149,11 @@ RC MVCCRow::rollbackVersion(TxnManager* txn_man) {
                 list_head_ = next_;
             }
             assert(cur_node->row);
+            
             // item表的行有空数据
             if (strlen(cur_node->row->data) != 0) {
-                mem_allocator.free(cur_node->row->data, cur_node->row->tuple_size); // row的数据缓冲区
+                cur_node->row->free_row();
+                // mem_allocator.free(cur_node->row->data, cur_node->row->tuple_size); // row的数据缓冲区
             }
             mem_allocator.free(cur_node->row,sizeof(row_t));  // row类对象
             mem_allocator.free(cur_node, sizeof(MVCCTransNode)); //  写版本的数据结构
@@ -155,6 +168,7 @@ RC MVCCRow::rollbackVersion(TxnManager* txn_man) {
             cur_node = cur_node->next;
         }
     }
+    while (!ATOM_CAS(latch_, true, false)) {}
     return RCOK;
 }
 
@@ -171,7 +185,10 @@ void MVCCRow::gabbageCollection(TxnManager* txn_man) {
             // assert(cur_node->row);
 
             if (strlen(cur_node->row->get_data()) != 0) {
-                mem_allocator.free(x->row->data, x->row->tuple_size); // row的数据缓冲区
+                if (x->row->data != NULL) {
+                    mem_allocator.free(x->row->data, x->row->tuple_size); // row的数据缓冲区
+                }
+                
             }
             mem_allocator.free(x->row,sizeof(row_t));  // row类对象
             mem_allocator.free(x, sizeof(MVCCTransNode)); //  写版本的数据结构

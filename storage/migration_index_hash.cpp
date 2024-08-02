@@ -189,7 +189,7 @@ void MigrationBucketHeader::insert_item(idx_key_t key,
 		prev_node = cur_node;
 		cur_node = cur_node->next;
 	}
-	if (cur_node == NULL) {	
+	if (cur_node == NULL) {
 		//这个桶(bucketheader)中的所有节点（bucket_node)的key均与当前key不等，因此需要创建新节点	
 		MigrationBucketNode * new_node = (MigrationBucketNode *) 
 			mem_allocator.alloc(sizeof(MigrationBucketNode));		
@@ -263,6 +263,7 @@ void MigrationBucketHeader::read_item(idx_key_t key, uint32_t count, itemid_t * 
 
 void MigrationIndexHash::print_index_structure() {
 	IndexIterator iter;
+	printf("打印表:%s\n",table->get_table_name());
 	// cout << "打印索引结构" << endl;
 	auto schema = table->get_schema();
 	// cout << schem

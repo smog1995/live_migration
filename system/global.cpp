@@ -197,3 +197,8 @@ UInt32 g_dist_per_wh = DIST_PER_WH;
 
 UInt32 g_repl_type = REPL_TYPE;
 UInt32 g_repl_cnt = REPLICA_CNT;
+
+
+int migra_part_id = -1;
+UInt64 migra_node_id = UINT64_MAX;
+bool route_exchange = false;

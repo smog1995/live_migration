@@ -49,8 +49,9 @@ public:
 	virtual RC init_schema(const char * schema_file);
 	virtual RC init_table()=0;
 	virtual RC get_txn_man(TxnManager *& txn_manager)=0;
-  virtual void transportSnapshot(uint64_t thd_id, char* table_name, int dest_id,int part_id)=0;
-  virtual void copyRowData(char* table_name, int part_id, int tuple_count, char* row_data)=0;
+   void transportSnapshot(uint64_t thd_id, char* table_name, int dest_id,int part_id);
+   void copyRowData(char* table_name, int part_id, int tuple_count, char* row_data);
+   void printTable(string table_index_name);
 	// get the global timestamp.
 //	uint64_t get_ts(uint64_t thread_id);
 	//uint64_t cur_txn_id;

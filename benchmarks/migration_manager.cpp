@@ -1,11 +1,12 @@
 
 #include "migration_manager.h"
 #include "msg_queue.h"
-
+#include "manager.h"
+class Manager;
 class MessageQueue;
-void MigrationManager::run_live_migration_stage_1(uint64_t thd_id, Message * msg) {
+void MigrationManager::run_live_migration_stage(uint64_t thd_id, Message * msg) {
     assert(ISSERVER);
-    cout << "run_live_migration_stage_1" <<endl;
+    // cout << "run_live_migration_stage_1" <<endl;
     //  客户端发送给源节点，源节点收到后开启迁移，发送给目标节点
     if (msg->get_rtype() == MIGRATION_MSG) {
         // cout << "(暂时只实现了快照传输)处理migration_msg" << endl;
@@ -14,18 +15,26 @@ void MigrationManager::run_live_migration_stage_1(uint64_t thd_id, Message * msg
         if (migration_msg->live_migration_stage == SNAPSHOT_TRANS) {
             printf("migration_manager: 收到客户端传输table(%s)的请求,发送目的节点(%d),分区(%d)\n",migration_msg->table_index_name, migration_msg->migration_dest_id, migration_msg->part_id);
             _wl->transportSnapshot(thd_id, migration_msg->table_index_name, migration_msg->migration_dest_id, migration_msg->part_id);
-        } else if (migration_msg->live_migration_stage == ASYNC_LOGS) {
+        } 
+        else if (migration_msg->live_migration_stage == ASYNC_LOGS) {
             //  TODO:  异步日志传输阶段处理
-            printf("异步日志传输阶段，目前未实现\n");
-        } else if (migration_msg->live_migration_stage == SYNC_EXEC) {
+            // printf("异步日志传输阶段，目前未实现\n");
+            // 这里实际是同步阶段的处理，之后换一下即可
+            glob_manager.setSyncState(!migration_msg->finish, migration_msg->part_id,migration_msg->migration_dest_id);
+        } 
+        else if (migration_msg->live_migration_stage == SYNC_EXEC) {
             //  TODO : 同步执行阶段处理
             printf("同步执行阶段，目前未实现\n");
         }
         
     //  目标节点确认快照接收完毕，发送给源节点确认消息
     } else if (msg->get_rtype() == SNAPSHOT_MSG) {
-        cout << "收到snapshotMessage" << endl;
+        // cout << "收到snapshotMessage" << endl;
+
         SnapshotMessage* snapshot_msg = (SnapshotMessage*) msg;
+        if (glob_manager.getPartId() == -1) {  //  确认迁移的分区
+                glob_manager.setPartId(snapshot_msg->part_id);
+            }
         _wl->copyRowData(snapshot_msg->table_index_name, snapshot_msg->part_id, 
                          snapshot_msg->tuple_count, snapshot_msg->snapshot_buffer);
         if (snapshot_msg->finish) {

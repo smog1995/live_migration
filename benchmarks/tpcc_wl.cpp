@@ -64,9 +64,10 @@ RC TPCCWorkload::init() {
 	init_table();
   printf("Done\n");
   fflush(stdout);
-//   i_warehouse->print_index_structure();
+  i_warehouse->print_index_structure();
+//   i_item->print_index_structure();
 //   i_stock->print_index_structure();
-  
+	//  i_district->print_index_structure();
 	return RCOK;
 }
 
@@ -638,97 +639,96 @@ void * TPCCWorkload::threadInitOrder(void * This) {
 	return NULL;
 }
 
-void TPCCWorkload::transportSnapshot(uint64_t thd_id, char* table_index_name, int dest_id,int part_id) {
-	// cout << "开始传输快照" << endl;
-	// string table_name_str(table_name, strlen(table_name));
-	// string index_name(table_name_str);
-	// index_name += "_IDX";
-	// auto table = tables[table_name];
-	auto iter = indexes[table_index_name]->getBeginIterator(part_id);
-	char * buffer = new char[2048];
-	uint32_t ptr = 0;
-	int tuple_count = 0;
-	row_t *row;
-	while(!iter.IsEnd()) {
-		std::pair<uint64_t, itemid_t*> pair = *iter;
-		++iter;
-		string key = to_string(pair.first);
-		key += "key"; //  标识
-		cout << key << "key" << endl;
-		row = (row_t*) pair.second->location;
-		if (ptr + row->get_tuple_size() >= 2048) {
-			SnapshotMessage* msg = (SnapshotMessage*) Message::create_message(SNAPSHOT_MSG);
-			msg->part_id = part_id;
-			msg->finish = false;
-			msg->tuple_count = tuple_count;
-			memcpy(msg->table_index_name, table_index_name, ptr);
-			memcpy(msg->snapshot_buffer, buffer, strlen(buffer));
-			msg_queue.enqueue(thd_id, msg, dest_id); 
-			ptr = 0;
-			tuple_count = 0;
-		}
+// void TPCCWorkload::transportSnapshot(uint64_t thd_id, char* table_index_name, int dest_id,int part_id) {
+// 	// cout << "开始传输快照" << endl;
+// 	// string table_name_str(table_name, strlen(table_name));
+// 	// string index_name(table_name_str);
+// 	// index_name += "_IDX";
+// 	// auto table = tables[table_name];
+// 	auto iter = indexes[table_index_name]->getBeginIterator(part_id);
+// 	char * buffer = new char[2048];
+// 	uint32_t ptr = 0;
+// 	int tuple_count = 0;
+// 	row_t *row;
+// 	while(!iter.IsEnd()) {
+// 		std::pair<uint64_t, itemid_t*> pair = *iter;
+// 		++iter;
+// 		string key = to_string(pair.first);
+// 		key += "key"; //  标识
+// 		cout << key << "key" << endl;
+// 		row = (row_t*) pair.second->location;
+// 		if (ptr + row->get_tuple_size() >= 2048) {
+// 			SnapshotMessage* msg = (SnapshotMessage*) Message::create_message(SNAPSHOT_MSG);
+// 			msg->part_id = part_id;
+// 			msg->finish = false;
+// 			msg->tuple_count = tuple_count;
+// 			memcpy(msg->table_index_name, table_index_name, ptr);
+// 			memcpy(msg->snapshot_buffer, buffer, strlen(buffer));
+// 			msg_queue.enqueue(thd_id, msg, dest_id); 
+// 			ptr = 0;
+// 			tuple_count = 0;
+// 		}
 		
-		COPY_BUF_SIZE(buffer, *key.c_str(), ptr, key.size());
-		string str(row->get_tuple_size(), 'a');
-		// cout << str <<"尝试打印str" << row->get_tuple_size() << " str的len:" << str.size();
-		COPY_BUF_SIZE(buffer, *str.c_str(), ptr, str.size());
-		// COPY_BUF_SIZE(buffer, *row->get_data(), ptr, row->get_tuple_size());
-		++tuple_count;
-	}
-	if (ptr != 0) { //  最后一次发送
-		printf("传输table index(%s)完成\n",table_index_name);
-		SnapshotMessage* msg = (SnapshotMessage*) Message::create_message(SNAPSHOT_MSG);
-		msg->part_id = part_id;
-		msg->finish = true;
-		msg->tuple_count = tuple_count;		
-		memcpy(msg->table_index_name, table_index_name, strlen(table_index_name));
-		memcpy(msg->snapshot_buffer, buffer, ptr);
-		msg_queue.enqueue(thd_id, msg, dest_id); 
-	}
-	delete[] buffer;
-}
+// 		COPY_BUF_SIZE(buffer, *key.c_str(), ptr, key.size());
+// 		string str(row->get_tuple_size(), 'a');
+// 		// cout << str <<"尝试打印str" << row->get_tuple_size() << " str的len:" << str.size();
+// 		COPY_BUF_SIZE(buffer, *str.c_str(), ptr, str.size());
+// 		// COPY_BUF_SIZE(buffer, *row->get_data(), ptr, row->get_tuple_size());
+// 		++tuple_count;
+// 	}
+// 	if (ptr != 0) { //  最后一次发送
+// 		printf("传输table index(%s)完成\n",table_index_name);
+// 		SnapshotMessage* msg = (SnapshotMessage*) Message::create_message(SNAPSHOT_MSG);
+// 		msg->part_id = part_id;
+// 		msg->finish = true;
+// 		msg->tuple_count = tuple_count;		
+// 		memcpy(msg->table_index_name, table_index_name, strlen(table_index_name));
+// 		memcpy(msg->snapshot_buffer, buffer, ptr);
+// 		msg_queue.enqueue(thd_id, msg, dest_id); 
+// 	}
+// 	delete[] buffer;
+// }
 
-void TPCCWorkload::copyRowData(char* table_index_name, int part_id, int tuple_count, char* row_data) {
-	row_t* row;
-	uint64_t row_id = 0; //  不使用
-	//  字符串截断
-	string table_index(table_index_name);
-	size_t pos = table_index.find('_'); // 获取该字符位置
-	string table_name(table_index.substr(0, pos));
-	// cout << "copyRowdata: table_name" << table_name << " ";  no wrong
-	auto table = tables[table_name];
-	uint64_t ptr = 0;
-	int i = 0;
-	printf("快照传输进行拷贝:");
-	int tuple_size = table->get_schema()->get_tuple_size();
-	cout<<"tuple_size" << tuple_size; 
-	string data(row_data);
-	while (i < tuple_count) {
-		// cout <<  "插入" ;
-		table->get_new_row(row, part_id, row_id);
-		//  寻找key的位置，字符串处理
-		size_t pos = data.find("key");  //  pos实则为key的长度
-		assert(pos != string::npos);
-		ptr += (uint64_t)pos + 3; // 3 为字符串"key"的长度
-		// cout << "额key" << stoi(data.substr(0,pos));
-		uint64_t key = (int) stoi(data.substr(0,pos));
-		data.erase(0, pos + 3 + tuple_size);  
-		
-		row->set_primary_key(key);
-		row->set_data(row_data + ptr);
-		ptr += tuple_size;
-		index_insert(indexes[table_index], key, row, part_id);
-		++i;
-	}
-}
+// void TPCCWorkload::copyRowData(char* table_index_name, int part_id, int tuple_count, char* row_data) {
+// 	row_t* row;
+// 	uint64_t row_id = 0; //  不使用
+// 	//  字符串截断
+// 	string table_index(table_index_name);
+// 	size_t pos = table_index.find('_'); // 获取该字符位置
+// 	string table_name(table_index.substr(0, pos));
+// 	// cout << "copyRowdata: table_name" << table_name << " ";  no wrong
+// 	auto table = tables[table_name];
+// 	uint64_t ptr = 0;
+// 	int i = 0;
+// 	// printf("快照传输进行拷贝:");
+// 	int tuple_size = table->get_schema()->get_tuple_size();
+// 	// cout<<"tuple_size" << tuple_size; 
+// 	string data(row_data);
+// 	while (i < tuple_count) {
+// 		// cout <<  "插入" ;
+// 		table->get_new_row(row, part_id, row_id);
+// 		//  寻找key的位置，字符串处理
+// 		size_t pos = data.find("key");  //  pos实则为key的长度
+// 		assert(pos != string::npos);
+// 		ptr += (uint64_t)pos + 3; // 3 为字符串"key"的长度
+// 		// cout << "额key" << stoi(data.substr(0,pos));
+// 		uint64_t key = (int) stoi(data.substr(0,pos));
+// 		data.erase(0, pos + 3 + tuple_size);  
+// 		row->set_primary_key(key);
+// 		row->set_data(row_data + ptr);
+// 		ptr += tuple_size;
+// 		index_insert(indexes[table_index], key, row, part_id);
+// 		++i;
+// 	}
+// }
                                                          
 
 
-void TPCCWorkload::printTable(string table_index_name) {
-	// 目前只打印一个表
-	// cout << "wl printTable" <<endl;
-	// string index_name("WAREHOUSE_IDX");
-	printf("打印 %s\n",table_index_name.c_str());
-	auto index = indexes[table_index_name];
-	index->print_index_structure();
-}
+// void TPCCWorkload::printTable(string table_index_name) {
+// 	// 目前只打印一个表
+// 	// cout << "wl printTable" <<endl;
+// 	// string index_name("WAREHOUSE_IDX");
+// 	printf("打印 %s\n",table_index_name.c_str());
+// 	auto index = indexes[table_index_name];
+// 	index->print_index_structure();
+// }

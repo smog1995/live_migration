@@ -468,18 +468,21 @@ public:
   void init() {}
   void release() {}
 
-  uint64_t pid;
+  // uint64_t pid;
+  
 #if CC_ALG == WAIT_DIE || CC_ALG == TIMESTAMP || CC_ALG == MVCC
   uint64_t ts;
 #endif
-#if CC_ALG == MVCC || CC_ALG == MVCC2PL
+#if CC_ALG == MVCC
   uint64_t thd_id;
 #elif CC_ALG == OCC 
   uint64_t start_ts;
 #endif
 #if MODE==QRY_ONLY_MODE
   uint64_t max_access;
+  
 #endif
+  int imitate_txn;
 };
 
 class YCSBQueryMessage : public QueryMessage {

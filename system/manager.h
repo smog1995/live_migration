@@ -19,6 +19,7 @@
 
 #include "helper.h"
 #include "global.h"
+#include "migration_stat.h"
 #include <mutex>
 #include <unordered_map>
 class row_t;
@@ -70,7 +71,7 @@ public:
 	}
 	unordered_map<string, unordered_map<uint64_t, std::shared_ptr<LockRequestQueue>>> row_lock_map_;
 	unordered_map<string, bool> row_lock_map_latch_;
-	RC lockRow(TxnManager* txn_man, lock_t lock_type, uint64_t row_key, string table_name);
+	RC lockRow(TxnManager* txn_man, lock_t lock_type, uint64_t row_key, string table_name, bool migration_part = false);
 	RC unlockRow(TxnManager* txn_man, uint64_t row_key, string table_name);
 	//  S，X
 	bool compatable_lock_[2][2] = {
@@ -91,14 +92,6 @@ public:
 	
 };
 
-struct TxnEntry {
-	txnid_t txn_id_;
-	std::chrono::system_clock::time_point start_block_time_; //  每次被阻塞，都要重新设置
-	bool remote_txn_ = false;
-	std::chrono::duration<double> blocked_time_;
-	bool blocked = true; // 起初为true
-	TxnEntry(txnid_t txn_id, bool remote_txn,std::chrono::system_clock::time_point start_block_time):txn_id_(txn_id),remote_txn_(remote_txn),start_block_time_(start_block_time){}
-};
 // class Statistics {
 
 // };
@@ -118,26 +111,47 @@ public:
 	
 	TxnManager * 		get_txn_man(int thd_id) { return _all_txns[thd_id]; };
 	void 			set_txn_man(TxnManager * txn);
-	void 		addBlockedTxn(txnid_t txn_id, bool remote_txn,std::chrono::system_clock::time_point start_block_time);
-	void 		calculateBlockTime(uint64_t thd_id);
-	void 		removeTxn(txnid_t txn_id);
-	void 		setUnblockedTxn(txnid_t txn_id);
-	void		abortOvertimeTxn(uint64_t thd_id, vector<txnid_t> &overtime_txns);
+
+
+	//  同步阶段处理
+	void		setSyncState(bool flag, int part_id, int dest_id) {
+		
+		sync_exec = flag;
+		partition_id = part_id;
+		migration_dest_id = dest_id;
+		printf("同步标志设置为%d",sync_exec);
+	}
+	void 		setDestId(int destid) { migration_dest_id = destid; }
+	void		setPartId(int partid) { partition_id = partid;	}
+	int 		getPartId()   {	return partition_id;}
+	//   只有需要发送迁移事务的节点这里为true
+	bool        getSyncFlag() { return sync_exec;}
+	int 		getDestId()	  { return migration_dest_id;}
 	LockManager lock_manager;
+	MigrationStat migration_stat;
 private:
 	pthread_mutex_t ts_mutex;
 	uint64_t 		timestamp;
 	pthread_mutex_t mutexes[BUCKET_CNT];
-	unordered_map<txnid_t, unique_ptr<TxnEntry>> blocked_txns;
-	bool blocked_txns_map_latch;
+
+
 	uint64_t 		hash(row_t * row);
 	ts_t * volatile all_ts;
 	TxnManager ** 		_all_txns;
 	ts_t			last_min_ts_time;
 	ts_t			min_ts;
-	std::chrono::duration<double>	limit_block_overtime; // <double, std::seconds>应该默认是秒
+	
 	vector<int> local_partitions;
 	
+	
+
+	//  同步迁移控制flag
+
+	bool sync_exec = false;
+	//  正迁移的分区
+	int partition_id = -1;
+	int migration_dest_id = -1;
+
 };
 
 #endif

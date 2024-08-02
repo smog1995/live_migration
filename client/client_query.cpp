@@ -21,7 +21,6 @@
 #include "ycsb_query.h"
 #include "tpcc_query.h"
 #include "pps_query.h"
-
 /*************************************************/
 //     class Query_queue
 /*************************************************/
@@ -90,12 +89,15 @@ Client_query_queue::initQueriesParallel() {
 #if SERVER_GENERATE_QUERIES
   for ( UInt32 thread_id = 0; thread_id < g_thread_cnt; thread_id ++) {
     for (UInt32 query_id = request_cnt / g_init_parallelism * tid; query_id < final_request; query_id ++) {
-      queries[thread_id][query_id] = gen->create_query(_wl,g_node_id);
+      queries[thread_id][query_id] = gen->creat
+      
+      _query(_wl,g_node_id);
     }
   }
 #else
   for ( UInt32 server_id = 0; server_id < g_servers_per_client; server_id ++) {
     for (UInt32 query_id = request_cnt / g_init_parallelism * tid; query_id < final_request; query_id ++) {
+      int partition_id = rand() % g_num_wh;
       queries[server_id][query_id] = gen->create_query(_wl,server_id+g_server_start_node);
     }
   }

@@ -424,12 +424,13 @@ void Message::release_message(Message * msg) {
 
 uint64_t QueryMessage::get_size() {
   uint64_t size = Message::mget_size();
-#if CC_ALG == WAIT_DIE || CC_ALG == TIMESTAMP || CC_ALG == MVCC
+#if CC_ALG == WAIT_DIE || CC_ALG == TIMESTAMP || CC_ALG == MVCC 
   size += sizeof(ts);
 #endif
 #if CC_ALG == OCC 
   size += sizeof(start_ts);
-#endif  
+#endif
+  size += sizeof(imitate_txn);
   return size;
 }
 
@@ -466,7 +467,10 @@ void QueryMessage::copy_from_buf(char * buf) {
 #endif
 #if CC_ALG == OCC 
  COPY_VAL(start_ts,buf,ptr);
+ 
 #endif
+  COPY_VAL(imitate_txn,buf,ptr);
+  assert( ptr == QueryMessage::get_size());
 }
 
 void QueryMessage::copy_to_buf(char * buf) {
@@ -479,7 +483,10 @@ void QueryMessage::copy_to_buf(char * buf) {
 #endif
 #if CC_ALG == OCC 
  COPY_BUF(buf,start_ts,ptr);
+ 
 #endif
+  COPY_BUF(buf,imitate_txn,ptr);
+  assert(ptr == QueryMessage::get_size());
 }
 
 /************************/
@@ -1528,6 +1535,12 @@ void TPCCQueryMessage::copy_to_txn(TxnManager * txn) {
 
   // new order
   if(txn_type == TPCC_NEW_ORDER) {
+    printf("neworder复制item\n");
+    if (imitate_txn) {
+      // tpcc_query->items.clear();
+      tpcc_query->items.release();
+      tpcc_query->items.init(g_max_items_per_txn * 2);
+    }
     tpcc_query->items.append(items);
     tpcc_query->rbk = rbk;
     tpcc_query->remote = remote;
@@ -1568,6 +1581,7 @@ void TPCCQueryMessage::copy_from_buf(char * buf) {
     items.init(size);
     for(uint64_t i = 0 ; i < size;i++) {
       DEBUG_M("TPCCQueryMessage::copy item alloc\n");
+      
       Item_no * item = (Item_no*)mem_allocator.alloc(sizeof(Item_no));
       COPY_VAL(*item,buf,ptr);
       items.add(item);
@@ -1846,7 +1860,7 @@ void PPSQueryMessage::copy_to_buf(char * buf) {
 //   COPY_VAL(lat_network_time,buf,ptr);
 //   COPY_VAL(lat_other_time,buf,ptr);
 void SnapshotMessage::copy_from_buf(char *buf) {
-  cout << "snapshotmesg";
+  // cout << "snapshotmesg";
   mcopy_from_buf(buf);
   uint64_t ptr = Message::mget_size();
   COPY_VAL(finish, buf, ptr);
@@ -1869,7 +1883,7 @@ void SnapshotMessage::copy_from_buf(char *buf) {
 
 void SnapshotMessage::copy_to_buf(char * buf) {
   mcopy_to_buf(buf);
-  cout << "snapshotMessage" << endl;
+  // cout << "snapshotMessage" << endl;
   uint64_t ptr = Message::mget_size();
   COPY_BUF(buf, finish, ptr);
   COPY_BUF(buf, part_id, ptr);
@@ -1878,7 +1892,7 @@ void SnapshotMessage::copy_to_buf(char * buf) {
   COPY_BUF(buf, tuple_count, ptr);
   COPY_BUF_SIZE(buf, table_index_name, ptr, TABLE_NAME_SIZE);
   COPY_BUF_SIZE(buf, snapshot_buffer, ptr, MIGRATION_BUFFER_SIZE);
-  cout << ptr << "buffer_size" << ptr;
+  // cout << ptr << "buffer_size" << ptr;
   // for (size_t i = 0; i < MIGRATION_BUFFER_SIZE; i++) {
   //   cout << snapshot_buffer[i];
   // }

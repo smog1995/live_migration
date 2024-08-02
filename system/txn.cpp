@@ -271,7 +271,7 @@ void Transaction::init() {
   batch_id = UINT64_MAX;
   waitting_row = NULL;
   DEBUG_M("Transaction::init array insert_rows\n");
-  insert_rows.init(g_max_items_per_txn + 10); 
+  insert_rows.init(g_max_items_per_txn + 20); 
   DEBUG_M("Transaction::reset array accesses\n");
   accesses.init(MAX_ROW_PER_TXN);  
 
@@ -354,6 +354,7 @@ void TxnManager::init(uint64_t thd_id, Workload * h_wl) {
   twopl_wait_start = 0;
 
   txn_stats.init();
+  committed = false;
 }
 
 // reset after abort
@@ -366,7 +367,9 @@ void TxnManager::reset() {
   aborted = false;
   return_id = UINT64_MAX;
   twopl_wait_start = 0;
-
+  sync_exec = false;
+  imitate_txn = false;
+  remote_txn = false;
   //ready = true;
 
   // MaaT
@@ -427,6 +430,10 @@ void TxnManager::reset_query() {
 }
 
 RC TxnManager::commit() {
+  if (!ATOM_CAS(committed, false , true)) {
+    return RCOK;
+  }
+
   DEBUG("Commit %ld\n",get_txn_id());
   printf("事务%ld尝试提交\n",get_txn_id());
   release_locks(RCOK);
@@ -442,28 +449,52 @@ RC TxnManager::commit() {
   logger.enqueueRecord(record);
   return WAIT;
 #endif
-  glob_manager.removeTxn(get_txn_id());
+  if (sync_exec) {
+    ATOM_ADD(glob_manager.migration_stat.imitate_commit_txn, 1);
+  }
+  if (query->partitions_touched.size() > 1  && IS_LOCAL(get_txn_id())) {  //  在目标节点上，模仿事务不能算作remote事务
+    ATOM_ADD(glob_manager.migration_stat.remote_commit_txn, 1);
+    ATOM_ADD(glob_manager.migration_stat.remote_txn, 1);
+  } else {
+    ATOM_ADD(glob_manager.migration_stat.local_commit_txn, 1);
+    ATOM_ADD(glob_manager.migration_stat.local_txn, 1);
+  }
+  glob_manager.migration_stat.removeTxn(get_txn_id());
   printf("事务%ld提交成功\n",get_txn_id());
+  
   return Commit;
 }
 
 RC TxnManager::abort() {
-  if(aborted)
-    return Abort;
+  if (!ATOM_CAS(aborted, false, true)) {
+    return RCOK;
+  }
+  aborted = true;
   DEBUG("Abort %ld\n",get_txn_id());
   cout << "终止";
   INC_STATS(get_thd_id(),total_txn_abort_cnt,1);
   txn_stats.abort_cnt++;
-  if(IS_LOCAL(get_txn_id())) {
-    INC_STATS(get_thd_id(), local_txn_abort_cnt, 1);
+  // if(IS_LOCAL(get_txn_id())) {
+  //   ATOM_ADD(glob_manager.migration_stat.local_abort_txn, 1);
+  //   INC_STATS(get_thd_id(), local_txn_abort_cnt, 1);
+  // } else if (!IS_LOCAL(get_txn_id()) || isImitateTxn()) {
+  //   INC_STATS(get_thd_id(), remote_txn_abort_cnt, 1);
+  //   ATOM_ADD(glob_manager.migration_stat.remote_abort_txn, 1);
+  //   txn_stats.abort_stats(get_thd_id());
+  // }
+  if (query->partitions_touched.size() > 1 && IS_LOCAL(get_txn_id())) {  //  在目标节点上，模仿事务不能算作remote事务
+    ATOM_ADD(glob_manager.migration_stat.remote_abort_txn, 1);
+    ATOM_ADD(glob_manager.migration_stat.remote_txn, 1);
   } else {
-    INC_STATS(get_thd_id(), remote_txn_abort_cnt, 1);
-    txn_stats.abort_stats(get_thd_id());
+    ATOM_ADD(glob_manager.migration_stat.local_abort_txn, 1);
+    ATOM_ADD(glob_manager.migration_stat.local_txn, 1);
   }
-
-  aborted = true;
+  
   release_locks(Abort);
-  glob_manager.removeTxn(get_txn_id()); 
+  if (sync_exec) {
+    ATOM_ADD(glob_manager.migration_stat.imitate_abort_txn, 1);
+  }
+  glob_manager.migration_stat.removeTxn(get_txn_id()); 
 #if CC_ALG == MAAT
   //assert(time_table.get_state(get_txn_id()) == MAAT_ABORTED);
   time_table.release(get_thd_id(),get_txn_id());
@@ -491,27 +522,40 @@ RC TxnManager::abort() {
 }
 
 RC TxnManager::start_abort() {
-  txn->rc = Abort;
+  txn->rc = Abort;  // 这个状态会放到消息中
   DEBUG("%ld start_abort\n",get_txn_id());
   if(query->partitions_touched.size() > 1) {
+    printf("事务%ldstart_abort(本函数中执行),开始发送finish\n",get_txn_id());
     send_finish_messages();
     abort();
     return Abort;
-  } 
+  }
   return abort();
 }
 
 RC TxnManager::start_commit() {
   RC rc = RCOK;
   DEBUG("%ld start_commit RO?%d\n",get_txn_id(),query->readonly());
+  
+#if MIGRATION == REMUS_MIGRATION
+  query->partitions_touched.add_unique(glob_manager.getDestId());
+  TPCCQueryMessage * msg = (TPCCQueryMessage*)Message::create_message(this,RQRY);
+  msg->imitate_txn = true;
+  msg->state = (((TPCCQuery*)query)->txn_type == TPCC_PAYMENT ? TPCC_PAYMENT0 : TPCC_NEWORDER0);
+  sync_exec = true;
+  msg_queue.enqueue(get_thd_id(),msg, glob_manager.getDestId());
+#endif
+
   if(is_multi_part()) {
     if(!query->readonly() || CC_ALG == OCC || CC_ALG == MAAT) {
       // send prepare messages
+      printf("事务%ldstart_commit(本函数中执行),开始发送prepare\n",get_txn_id());
       send_prepare_messages();
       rc = WAIT_REM;
     } else {
+      printf("事务%ldstart_commit(本函数中执行),开始发送finish\n",get_txn_id());
       send_finish_messages();
-      rsp_cnt = 0;
+      // rsp_cnt = 0;,
       rc = commit();
     }
   } else { // is not multi-part
@@ -527,6 +571,7 @@ RC TxnManager::start_commit() {
 void TxnManager::send_prepare_messages() {
   rsp_cnt = query->partitions_touched.size() - 1;
   DEBUG("%ld Send PREPARE messages to %d\n",get_txn_id(),rsp_cnt);
+  DEBUG("%ld Send PREPARE messages to %d\n",get_txn_id(),rsp_cnt);
   for(uint64_t i = 0; i < query->partitions_touched.size(); i++) {
     if(GET_NODE_ID(query->partitions_touched[i]) == g_node_id) {
       continue;
@@ -539,6 +584,7 @@ void TxnManager::send_finish_messages() {
   rsp_cnt = query->partitions_touched.size() - 1;
   assert(IS_LOCAL(get_txn_id()));
   DEBUG("%ld Send FINISH messages to %d\n",get_txn_id(),rsp_cnt);
+  printf("事务%ld Send FINISH messages to %d\n",get_txn_id(),rsp_cnt);
   for(uint64_t i = 0; i < query->partitions_touched.size(); i++) {
     if(GET_NODE_ID(query->partitions_touched[i]) == g_node_id) {
       continue;
@@ -547,9 +593,15 @@ void TxnManager::send_finish_messages() {
   }
 }
 
+void TxnManager::send_sync_twopc_transaction() {
+
+}
+
 int TxnManager::received_response(RC rc) {
-  assert(txn->rc == RCOK || txn->rc == Abort);
-  if(txn->rc == RCOK)
+  printf("txn%ld的rc为:%d",get_txn_id(),txn->rc);
+
+  // assert(txn->rc == RCOK || txn->rc == Abort);
+  // if(txn->rc == RCOK)
     txn->rc = rc;
 #if CC_ALG == CALVIN
   ++rsp_cnt;
@@ -591,9 +643,7 @@ void TxnManager::commit_stats() {
       INC_STATS(get_thd_id(),single_part_txn_cnt,1);
       INC_STATS(get_thd_id(),single_part_txn_run_time,timespan_long);
     }
-    /*if(cflt) {
-      INC_STATS(get_thd_id(),cflt_cnt_txn,1);
-    }*/
+
     txn_stats.commit_stats(get_thd_id(),get_txn_id(),get_batch_id(),timespan_long, timespan_short);
   #if CC_ALG == CALVIN
     return;
@@ -826,6 +876,7 @@ RC TxnManager::get_row(row_t * row, access_t type, row_t *& row_rtn) {
     //  这个row是从index中找到的在内存的位置，但是并不一定我们要获取的真正位置，因为如果采用mvcc或ts，需要用拷贝或者版本,access->data才是
     rc = row->get_row(type, this, access->data);
     if (rc == WAIT) {  //  这个是自己加的，确保不动到之前的设置
+
       set_rc(WAIT);  // 还是一样，重新运行(worker_thread的处理rtxn_cnt仍为RCOK
       // 阻塞时设置等待的行，作用是在死锁检测终止时，同时也将该行终止
       txn->waitting_row = this->last_row;
@@ -892,7 +943,9 @@ RC TxnManager::get_row_post_wait(row_t *& row_rtn) {
 	uint64_t starttime = get_sys_clock();
   row_t * row = this->last_row;
   access_t type = this->last_type;
-  assert(row != NULL);
+  if (row == NULL) {
+    return RCOK;
+  }
   DEBUG_M("TxnManager::get_row_post_wait access alloc\n")
   Access * access;
   access_pool.get(get_thd_id(),access);
@@ -998,7 +1051,6 @@ TxnManager::send_remote_reads() {
     }
   }
   return RCOK;
-
 }
 
 bool TxnManager::calvin_exec_phase_done() {
@@ -1026,4 +1078,14 @@ void TxnManager::release_locks(RC rc) {
 
 	uint64_t timespan = (get_sys_clock() - starttime);
 	INC_STATS(get_thd_id(), txn_cleanup_time,  timespan);
+}
+
+
+void TxnManager::runSyncExec() {
+  if (sync_exec) {
+    return ;
+  }
+  sync_exec = true;
+  
+
 }
