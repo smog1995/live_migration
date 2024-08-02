@@ -150,7 +150,8 @@ RC Workload::init_schema(const char * schema_file) {
       }
 #else
 	  tname_len = 10;
-      table_size = g_synth_table_size / g_part_cnt;
+    //   table_size = g_synth_table_size / g_part_cnt;  //原先的设置，因为migration_index被我改了所以这得改
+		table_size = g_synth_table_size;
 #endif
 #if INDEX_STRUCT == IDX_HASH
 			index->init(1024, tables[tname.substr(1,tname_len)], table_size);
