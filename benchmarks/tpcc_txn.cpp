@@ -76,7 +76,7 @@ RC TPCCTxnManager::run_txn() {
     query->partitions_touched.add_unique(GET_PART_ID(0,g_node_id));
   }
   if (isImitateTxn()) {
-    printf("当前next_item_id为:%d，重置为0\n",next_item_id);
+    printf("当前next_item_id为:%d,重置为0\n",next_item_id);
     next_item_id = 0;
   }
   //  注意这里是while，因为执行一个事务不止处理一个entry

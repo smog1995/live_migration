@@ -88,6 +88,16 @@ RC YCSBTxnManager::acquire_locks() {
   return rc;
 }
 
+RC YCSBTxnManager::send_migration_txn() {
+  YCSBQuery* ycsb_query = (YCSBQuery*) query;
+  ycsb_query->partitions_touched.add_unique(glob_manager.getDestId());
+  YCSBQueryMessage * msg = (YCSBQueryMessage*)Message::create_message(this,RQRY);
+  msg->imitate_txn = true;
+  uint64_t dest_id = glob_manager.getDestId();
+  printf("发送事务%ld的同步迁移事务，事务类型:%d,destid为:%d\n",get_txn_id(),msg->state, dest_id);
+  msg_queue.enqueue(get_thd_id(),msg, dest_id);
+  ATOM_ADD(glob_manager.migration_stat.imitate_txn, 1);
+}
 
 RC YCSBTxnManager::run_txn() {
   RC rc = RCOK;
@@ -102,8 +112,23 @@ RC YCSBTxnManager::run_txn() {
   uint64_t starttime = get_sys_clock();
 
   while(rc == RCOK && !is_done()) {
+    if (glob_manager.getSyncFlag() && !sync_exec && key_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId() && !isRemoteTxn() && !isImitateTxn()) {
+      //  开启活跃事务迁移
+      send_migration_txn();
+      sync_exec = true;
+    }
+    if (sync_exec_rtn_abort) {
+      rc = Abort;
+    }
     rc = run_txn_state();
+    //  对象：目标节点
+    //   ----同步过程影子事务执行出错,在调用该函数的worker_thread层进行：告诉源节点需要回滚，然后目标这边先不终止，而是停止运行,等待源节点用2pc终止
+    
   }
+  if (rc == Abort && imitate_txn) {
+    return rc;
+  }
+
 
   uint64_t curr_time = get_sys_clock();
   txn_stats.process_time += curr_time - starttime;
@@ -189,7 +214,6 @@ RC YCSBTxnManager::run_txn_state() {
         rc = run_ycsb_0(req,row);
       } else {
         rc = send_remote_request();
-        
       }
 
       break;
