@@ -89,7 +89,7 @@ RC YCSBWorkload::init_table() {
             }
             row_t * new_row = NULL;
 			uint64_t row_id;
-			UInt32 row_part_id = _wl->key_to_part(total_row);
+			UInt32 row_part_id = key_to_part(total_row);
             rc = the_table->get_new_row(new_row, row_part_id, row_id); 
             // insertion of last row may fail after the table_size
             // is updated. So never access the last record in a table

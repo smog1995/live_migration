@@ -835,7 +835,7 @@ void TxnManager::cleanup(RC rc) {
 	for (int rid = row_cnt - 1; rid >= 0; rid --) {
 	    cleanup_row(rc,rid);
 	}
-  printf("事务%ld解锁完毕\n",this->get_txn_id());
+  // printf("事务%ld解锁完毕\n",this->get_txn_id());
 	if (rc == Abort) {
 	    txn->release_inserts(get_thd_id());
 	    txn->insert_rows.clear();

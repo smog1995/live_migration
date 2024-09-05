@@ -105,7 +105,7 @@ int main(int argc, char* argv[])
 			assert(false);
 	}
 	m_wl->init();
-  m_wl->printTable("MAIN_INDEX");
+  // m_wl->printTable("MAIN_INDEX");
 	printf("Workload initialized!\n");
   fflush(stdout);
 #if NETWORK_TEST

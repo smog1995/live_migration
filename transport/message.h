@@ -494,7 +494,7 @@ public:
   uint64_t get_size();
   void init();
   void release(); 
-
+  uint64_t state; 
  Array<ycsb_request*> requests;
 
 };

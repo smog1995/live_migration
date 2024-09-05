@@ -57,29 +57,34 @@ void MigrationStat::caculateIntervalThroughput() {
 	
 	interval_throughput[0].push_back(local_abort_txn - current_throughput[0]);
 	interval_throughput[1].push_back(local_commit_txn - current_throughput[1]);
-	interval_throughput[2].push_back(remote_commit_txn - current_throughput[2]);
-	interval_throughput[3].push_back(remote_abort_txn - current_throughput[3]);
+	interval_throughput[2].push_back(remote_abort_txn - current_throughput[2]);
+	interval_throughput[3].push_back(remote_commit_txn - current_throughput[3]);
 	interval_throughput[4].push_back(imitate_abort_txn - current_throughput[4]);
 	interval_throughput[5].push_back(imitate_commit_txn - current_throughput[5]);
 
 	current_throughput[0] = local_abort_txn;
 	current_throughput[1] = local_commit_txn;
-	current_throughput[2] = remote_commit_txn;
-    current_throughput[3] = remote_abort_txn;
+	current_throughput[2] = remote_abort_txn;
+	current_throughput[3] = remote_commit_txn;
     current_throughput[4] = imitate_abort_txn;
 	current_throughput[5] = imitate_commit_txn;
 }
 
 void MigrationStat::printStats() {
-
-	printf("事务统计:本节点事务开始数量:%d\n",start_txn);
-	printf("本地分区事务数量:%d,提交数量:%d,终止数量:%d\n",local_txn, local_commit_txn, local_abort_txn);
-	printf("本地发起的远程事务数量:%d,提交数量:%d,终止数量:%d\n",remote_txn, remote_commit_txn, remote_abort_txn);
-	printf("本地发起的模仿事务数量:%d,提交数量:%d,终止数量:%d\n",imitate_txn,imitate_commit_txn,imitate_abort_txn);
+	std::ofstream outputFile;
+	outputFile.open("result.txt");
+	outputFile << "事务统计:本节点事务开始数量:" << start_txn << endl;
+	// printf("事务统计:本节点事务开始数量:%d\n",start_txn);
+	// printf("本地分区事务数量:%d,提交数量:%d,终止数量:%d\n",local_txn, local_commit_txn, local_abort_txn);
+	// printf("本地发起的远程事务数量:%d,提交数量:%d,终止数量:%d\n",remote_txn, remote_commit_txn, remote_abort_txn);
+	// printf("本地发起的模仿事务数量:%d,提交数量:%d,终止数量:%d\n",imitate_txn,imitate_commit_txn,imitate_abort_txn);
 	for (int i = 0; i < throughput_stats_size; i++) {
 		for (int j = 0; j < interval_throughput[i].size();j++) {
-			printf("%d ", interval_throughput[i][j]);
+			// printf("%d ", interval_throughput[i][j]);
+			outputFile << " " << interval_throughput[i][j];
 		}
-		printf("\n");
+		// printf("\n");
+		outputFile << endl;
 	}
+	outputFile.close(); // 关闭文件流
 }

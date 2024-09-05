@@ -1420,6 +1420,7 @@ void YCSBQueryMessage::copy_from_buf(char * buf) {
     ASSERT(req->key < g_synth_table_size);
     requests.add(req);
   }
+  COPY_VAL(state,buf,ptr);
  assert(ptr == get_size());
 }
 
@@ -1432,6 +1433,7 @@ void YCSBQueryMessage::copy_to_buf(char * buf) {
     ycsb_request * req = requests[i];
     COPY_BUF(buf,*req,ptr);
   }
+  COPY_BUF(buf,state,ptr);
  assert(ptr == get_size());
 }
 /************************/

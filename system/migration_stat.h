@@ -26,7 +26,7 @@ public:
 		local_commit_txn = 0;
 		remote_commit_txn = 0;
 		imitate_commit_txn = 0;
-		throughput_stats_size = 0;
+		throughput_stats_size = 6;
 		for (int i = 0; i < throughput_stats_size; i++) {
 			current_throughput.push_back(0);
 			interval_throughput.emplace_back(vector<int>());
@@ -61,7 +61,7 @@ public:
 
 	vector<int> current_throughput;
 //  interval为5s的throughput
-	vector<int,vector<int>> interval_throughput;
+	vector<vector<int>> interval_throughput;
 private:
     	//  事务阻塞超时处理
 	unordered_map<txnid_t, unique_ptr<TxnEntry>> blocked_txns;

@@ -375,7 +375,6 @@ RC WorkerThread::process_rqry(Message * msg) {
   if (((QueryMessage*)msg)->imitate_txn) {
     printf("开启模仿事务%ld\n", txn_man->get_txn_id());
     txn_man->setImitateTxn();
-
   } else {
     txn_man->setRemoteTxn();
   }

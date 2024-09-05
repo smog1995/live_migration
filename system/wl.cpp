@@ -100,7 +100,8 @@ RC Workload::init_schema(const char * schema_file) {
       // 每个分表的行总数
       if ( !tname.compare(1, 9, "WAREHOUSE") ) {
         tname_len = 9;
-        table_size = g_num_wh / g_part_cnt;    wh有10个,g_part_cnt若为5（5分区）,则每个分表有2个
+        table_size = g_num_wh / g_part_cnt;   
+		//  wh有10个,g_part_cnt若为5（5分区）,则每个分表有2个
         printf("WAREHOUSE size %ld\n",table_size);
       } else if ( !tname.compare(1, 8, "DISTRICT") ) {
         tname_len = 8;

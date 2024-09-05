@@ -10,7 +10,7 @@ RC DeadLockDetectThread::run() {
         } else {
             glob_manager.migration_stat.calculateBlockTime(get_thd_id());
         }
-        if (i % 10 == 0) {
+        if (i % 20 == 0) {
             i = 0;
             glob_manager.migration_stat.caculateIntervalThroughput();
         }
@@ -23,6 +23,6 @@ RC DeadLockDetectThread::run() {
 }
 void DeadLockDetectThread::setup() {
     //Microsecond，等于1000微秒为1毫秒
-    sleep_microsecond = 500000;
+    sleep_microsecond = 50000;
 
 }

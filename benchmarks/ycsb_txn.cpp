@@ -113,7 +113,7 @@ RC YCSBTxnManager::run_txn() {
   uint64_t starttime = get_sys_clock();
 
   while(rc == RCOK && !is_done()) {
-    if (glob_manager.getSyncFlag() && !sync_exec && key_to_part(((TPCCQuery*)query)->w_id) == glob_manager.getPartId() && !isRemoteTxn() && !isImitateTxn()) {
+    if (glob_manager.getSyncFlag() && !sync_exec && key_to_part(((YCSBQuery*)query)->requests[next_record_id]->key) == glob_manager.getPartId() && !isRemoteTxn() && !isImitateTxn()) {
       //  开启活跃事务迁移
       send_migration_txn();
       sync_exec = true;
@@ -185,6 +185,13 @@ bool YCSBTxnManager::is_local_request(uint64_t idx) {
 }
 
 RC YCSBTxnManager::send_remote_request() {
+  if (isImitateTxn()) {
+    return RCOK;
+  }
+  if (sync_exec && key_to_part(((YCSBQuery*)query)->requests[next_record_id]->key) == glob_manager.getPartId()) {
+    setRemoteTxn();
+    return RCOK; //  指的是迁移事务被发往目标执行了，因此不需要继续发送远程执行
+  }
   YCSBQuery* ycsb_query = (YCSBQuery*) query;
   uint64_t dest_node_id = GET_NODE_ID(ycsb_query->requests[next_record_id]->key);
   ycsb_query->partitions_touched.add_unique(GET_PART_ID(0,dest_node_id));

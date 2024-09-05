@@ -132,11 +132,11 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 	while (!ATOM_CAS(lock_request_queue->latch_, false, true)) {}
 	if (txn_man->isImitateTxn() && migration_part && lock_type == RD) {
 		// 模仿事务加锁失败则中止
-		if (lock_request_queue->granted_count_ != 0) {
-			printf("模仿事务%ld加锁时发现表%s的%ld已上锁，终止,migration_part为%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key,migration_part);
-			ATOM_CAS(lock_request_queue->latch_, true, false);
-			return Abort;
-		}
+		// if (lock_request_queue->granted_count_ != 0) {
+		// 	printf("模仿事务%ld加锁时发现表%s的%ld已上锁，终止,migration_part为%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key,migration_part);
+		// 	ATOM_CAS(lock_request_queue->latch_, true, false);
+		// 	return Abort;
+		// }
 		// auto first_request = lock_request_queue->request_queue_.begin();
 		// if ((*first_request)->grant_ )
 	}
@@ -156,13 +156,13 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 			// 一种可能是之前事务阻塞，重新运行时重复加锁，此时我们的锁请求已经在队列中，也就是当前请求，我们需要将grant赋值为true；另一种就是事务对同一行做了多次访问
 			if ((*ele)->grant_ == false) {
 				(*ele)->grant_ = true;
-				cout << "唤醒后事务" << txn_man->get_txn_id() << "对row" << row_key << " 加锁" << endl;
+				// cout << "唤醒后事务" << txn_man->get_txn_id() << "对row" << row_key << " 加锁" << endl;
 				lock_request_queue->granted_count_++;
 				ATOM_CAS(lock_request_queue->latch_, true, false);
 				return rc;
 						// 当一开始事务上的是写锁，那么肯定不需要继续加锁；或者加了同样的读锁，也不需要再加
 			} else if ((*ele)->lock_type_ == lock_type || (*ele)->lock_type_ == LOCK_EX) {
-				cout << "已经加过锁,无需再加,之前的锁为" <<(*ele)->lock_type_  << ",现在的锁为: " << lock_type << endl;
+				// cout << "已经加过锁,无需再加,之前的锁为" <<(*ele)->lock_type_  << ",现在的锁为: " << lock_type << endl;
 				ATOM_CAS(lock_request_queue->latch_, true, false);
 				return rc;
 			//  只有读锁升级为写锁需要加请求，同时要判断是否只有一个事务，如果有多个事务共享读，那么先放写锁请求到等待队列
@@ -184,10 +184,10 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 	
 	if (rc == RCOK) {  //  
 		lock_request->grant_ = true;
-		printf("事务%ld对表%s的row%ld加锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
+		// printf("事务%ld对表%s的row%ld加锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
 		lock_request_queue->granted_count_++;
 	} else {
-		printf("事务%ld对表%s的row%ld加锁但失败,需要等待锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
+		// printf("事务%ld对表%s的row%ld加锁但失败,需要等待锁\n",txn_man->get_txn_id(), table_name.c_str(), row_key);
 	}
 	lock_request_queue->request_queue_.push_back(std::unique_ptr<LockRequest>(lock_request));
 	ATOM_CAS(lock_request_queue->latch_, true, false);
@@ -200,7 +200,7 @@ RC LockManager::lockRow(TxnManager *txn_man, lock_t lock_type, uint64_t row_key,
 //  同时，一个事务对一个行只可能有一个锁
 //  非严格两阶段锁（事务未结束即可释放锁）
 RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_name) {
-	printf("事务%ld尝试对table(%s)的row%ld解锁\n",txn_man->get_txn_id(),table_name.c_str(), row_key);
+	// printf("事务%ld尝试对table(%s)的row%ld解锁\n",txn_man->get_txn_id(),table_name.c_str(), row_key);
 	RC rc = RCOK;
 	txnid_t txn_id = txn_man->get_txn_id();
 	while (!ATOM_CAS(row_lock_map_latch_[table_name], false, true)) {}
@@ -216,13 +216,13 @@ RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_na
 		if ((*ele)->txn_id_ == txn_id) {
 			if ((*ele)->grant_ == true) {
 				lock_request_queue->granted_count_--;
-				printf("事务%ld对table%s的row%ld解锁成功,此时请求队列剩余锁授予数量:%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key, lock_request_queue->granted_count_);
+				// printf("事务%ld对table%s的row%ld解锁成功,此时请求队列剩余锁授予数量:%d\n",txn_man->get_txn_id(),table_name.c_str(),row_key, lock_request_queue->granted_count_);
 				txn_lock_type = (*ele)->lock_type_;
 				lock_request_queue->request_queue_.erase(ele);
 				
 				first_unlock = true;
 			} else {// 阻塞事务的终止
-				printf("阻塞事务%ld的未授权锁请求移除row%ld\n",txn_man->get_txn_id(),row_key);
+				// printf("阻塞事务%ld的未授权锁请求移除row%ld\n",txn_man->get_txn_id(),row_key);
 				lock_request_queue->request_queue_.erase(ele);
 			}
 			break;
@@ -242,7 +242,7 @@ RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_na
 					txn_table.restart_txn(txn_man->get_thd_id(), ele->txn_id_, 0);
 					// 或者遇到的第一个锁仍是写锁，那么只授予一个写锁然后break
 				} else if (ele->lock_type_ == LOCK_EX && is_first_request) {
-					printf("唤醒写事务%ld ",ele->txn_id_);
+					// printf("唤醒写事务%ld ",ele->txn_id_);
 					txn_table.restart_txn(txn_man->get_thd_id(), ele->txn_id_, 0);
 					break;
 				}
@@ -254,9 +254,9 @@ RC LockManager::unlockRow(TxnManager* txn_man, uint64_t row_key, string table_na
 			// printf("唤醒写事务%ld ",(*first_request)->txn_id_);
 			txn_table.restart_txn(txn_man->get_thd_id(), (*first_request)->txn_id_, 0);
 		}
-		printf("唤醒结束\n");
+		// printf("唤醒结束\n");
 	} else {
-		printf("无需唤醒,此时请求队列中的数量:%ld\n",lock_request_queue->request_queue_.size());
+		// printf("无需唤醒,此时请求队列中的数量:%ld\n",lock_request_queue->request_queue_.size());
 		// lockRequestDump(row_key, table_name);
 	}
 	ATOM_CAS(lock_request_queue->latch_, true ,false);
@@ -343,14 +343,14 @@ void LockManager::deathLockDetection(uint64_t thd_id) {
 	}
 	txnid_t target_abort_txnid = cycleDetection(graph);
 	if (target_abort_txnid != 0) {
-		printf("死锁检测:检测到有循环依赖,终止事务%ld\n",target_abort_txnid);
+		// printf("死锁检测:检测到有循环依赖,终止事务%ld\n",target_abort_txnid);
 		txn_table.restart_txn_abort(thd_id, target_abort_txnid);
 	} else {
-		printf("无死锁\n");
+		// printf("无死锁\n");
 	}
 }
 void LockManager::lockRequestDump(uint64_t rowkey, string table_name) {
-	printf("table_name:%s,row_key:%ld,lock_request dump\n",table_name.c_str(),rowkey);
+	// printf("table_name:%s,row_key:%ld,lock_request dump\n",table_name.c_str(),rowkey);
 	while (!ATOM_CAS(row_lock_map_latch_[table_name], false, true)) {}
 	// assert(row_lock_map_.find(table_name) != row_lock_map_.end());
 	// if (row_lock_map_[table_name].find(rowkey) != row_lock_map_[table_name].end()) {
@@ -364,12 +364,12 @@ void LockManager::lockRequestDump(uint64_t rowkey, string table_name) {
 	assert(row_lock_map_[table_name].find(rowkey) != row_lock_map_[table_name].end());
 	auto lock_request_queue = row_lock_map_[table_name].at(rowkey);
 	while (!ATOM_CAS(row_lock_map_latch_[table_name], true, false)) {}
-	printf("request_granted_count:%d\n",lock_request_queue->granted_count_);
+	// printf("request_granted_count:%d\n",lock_request_queue->granted_count_);
 	int i = 0;
 	for(auto & ele: lock_request_queue->request_queue_) {
-		printf("%d:(txn_id: %ld, grant_: %d)  ",i++,ele->txn_id_,ele->grant_);
+		// printf("%d:(txn_id: %ld, grant_: %d)  ",i++,ele->txn_id_,ele->grant_);
 	}
-	printf("dump_finish\n");
+	// printf("dump_finish\n");
 	
 }
 
